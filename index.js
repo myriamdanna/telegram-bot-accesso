@@ -1,3 +1,9 @@
+const TelegramBot = require("node-telegram-bot-api");
+const Stripe = require("stripe");
+
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
 bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
   const chatId = msg.chat.id;
