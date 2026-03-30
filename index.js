@@ -13,7 +13,7 @@ bot.on("message", async (msg) => {
       mode: "subscription",
       line_items: [
         {
-          price: "price_XXXXXXXX", // 🔴 metti quello vero
+          price: price_1TG1UPKSYfmjXmRwCcfunIZp, // 🔴 metti quello vero
           quantity: 1,
         },
       ],
