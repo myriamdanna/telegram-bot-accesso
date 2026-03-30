@@ -22,8 +22,9 @@ bot.on("message", async (msg) => {
     });
 
     // 👉 manda SOLO il link
-    return bot.sendMessage(chatId, "🔥 Paga qui:\n" + session.url);
-
+    return bot.sendMessage(chatId, `🔥 Accedi qui 👇
+    ${session.url}`);
+    
   } catch (error) {
     console.log("ERRORE STRIPE:", error);
     return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
