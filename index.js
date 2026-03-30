@@ -1,10 +1,15 @@
-const TelegramBot = require("node-telegram-bot-api");
-const Stripe = require("stripe");
+let isProcessing = false;
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+bot.on("message", async (msg) => {
+  const text = msg.text?.toLowerCase();
 
-bot.onText(/\/start/, async (msg) => {
+  // 👉 risponde SOLO a "ciao"
+  if (text !== "ciao") return;
+
+  // 👉 blocca doppie richieste
+  if (isProcessing) return;
+  isProcessing = true;
+
   const chatId = msg.chat.id;
 
   try {
@@ -13,7 +18,7 @@ bot.onText(/\/start/, async (msg) => {
       mode: "subscription",
       line_items: [
         {
-          price: "price_1TG1UPKSYfmjXmRwCcfunIZp", // tuo vero ID
+          price: "price_1TG1UPKSYfmjXmRwCcfunIZp", // il tuo ID
           quantity: 1,
         },
       ],
@@ -21,12 +26,12 @@ bot.onText(/\/start/, async (msg) => {
       cancel_url: "https://t.me/tuo_bot",
     });
 
-    // 👉 manda SOLO il link
-    return bot.sendMessage(chatId, `🔥 Accedi qui 👇
-    ${session.url}`);
-    
+    await bot.sendMessage(chatId, `🔥 Accedi qui 👇\n${session.url}`);
+
   } catch (error) {
     console.log("ERRORE STRIPE:", error);
-    return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
+    await bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
   }
+
+  isProcessing = false;
 });
