@@ -1,14 +1,9 @@
-let isProcessing = false;
-
 bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
   const chatId = msg.chat.id;
 
-  // 👉 accetta sia "ciao" che "/start"
+  // 👉 accetta ciao o /start
   if (!text || (!text.includes("ciao") && text !== "/start")) return;
-
-  if (isProcessing) return;
-  isProcessing = true;
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -16,7 +11,7 @@ bot.on("message", async (msg) => {
       mode: "subscription",
       line_items: [
         {
-          price: "price_1TG1UPKSYfmjXmRwCcfunIZp", // CONTROLLA QUESTO
+          price: "price_1TG1UPKSYfmjXmRwCcfunIZp", // il tuo ID GIUSTO
           quantity: 1,
         },
       ],
@@ -24,14 +19,10 @@ bot.on("message", async (msg) => {
       cancel_url: "https://t.me/tuo_bot",
     });
 
-    await bot.sendMessage(chatId, `🔥 Accedi qui 👇\n${session.url}`);
+    return bot.sendMessage(chatId, `🔥 Accedi qui 👇\n${session.url}`);
 
   } catch (error) {
     console.log("ERRORE STRIPE:", error);
-
-    // 👇 errore più pulito
-    await bot.sendMessage(chatId, "⚠️ Riprova tra qualche secondo");
+    return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
   }
-
-  isProcessing = false;
 });
