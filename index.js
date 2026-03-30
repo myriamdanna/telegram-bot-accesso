@@ -4,7 +4,7 @@ const Stripe = require("stripe");
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-bot.on("message", async (msg) => {
+bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
   try {
