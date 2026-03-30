@@ -4,7 +4,7 @@ bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
 
   // 👉 risponde SOLO a "ciao"
-  if (text !== "ciao") return;
+  if (!text ||  !text.includes("ciao")) return;
 
   // 👉 blocca doppie richieste
   if (isProcessing) return;
