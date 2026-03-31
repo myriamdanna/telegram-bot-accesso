@@ -1,3 +1,4 @@
+const utenti = new Set();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
 
@@ -6,7 +7,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
-  const chatId = msg.chat.id;
+  const chatId = msg.chat.id; utenti.delete(chatId), 5000);
+  if (utenti.has(chatId)) return;
+  utenti.add(chatId);
+
+  setTimeout(() =>
 
   // 👉 accetta ciao o /start
   if (!text || (!text.includes("ciao") && text !== "/start")) return;
