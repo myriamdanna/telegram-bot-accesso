@@ -21,8 +21,8 @@ bot.on("message", async (msg) => {
           quantity: 1,
         },
       ],
-      success_url: "https://t.me/tuo_bot",
-      cancel_url: "https://t.me/tuo_bot",
+      success_url: "https://t.me/Myriambot",
+      cancel_url: "https://t.me/Myriambot",
     });
 
     return bot.sendMessage(chatId, `🔥 Accedi qui 👇\n${session.url}`);
