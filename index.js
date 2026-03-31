@@ -13,11 +13,10 @@ bot.on("message", async (msg) => {
 
   try {
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
       mode: "subscription",
       line_items: [
         {
-          price: "price_1TG1UPKSYfmjXmRwCcfunIZp", // il tuo ID GIUSTO
+          price: "price_1TG1UPKSYfmjXmRwCcfunIZp",
           quantity: 1,
         },
       ],
@@ -26,10 +25,8 @@ bot.on("message", async (msg) => {
     });
 
     return bot.sendMessage(
-      chatId, 
-      "🔥 Accedi qui 👇\n" + 
-      session.url + 
-      "\n\n 🔓 Dopo il pagamento scrivi: accesso"
+      chatId,
+      "🔥 Accedi qui 👇\n" + session.url
     );
 
   } catch (error) {
