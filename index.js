@@ -25,7 +25,12 @@ bot.on("message", async (msg) => {
       cancel_url: "https://t.me/Myriambot",
     });
 
-    return bot.sendMessage(chatId, `🔥 Accedi qui 👇\n${session.url}`);
+    return bot.sendMessage(
+      chatId, 
+      "🔥 Accedi qui 👇\n" + 
+      session.url + 
+      "\n\n 🔓 Dopo il pagamento scrivi: accesso"
+    );
 
   } catch (error) {
     console.log("ERRORE STRIPE:", error);
