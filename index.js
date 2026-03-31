@@ -7,11 +7,14 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
-  const chatId = msg.chat.id; utenti.delete(chatId), 5000);
+  const chatId = msg.chat.id; 
+  
   if (utenti.has(chatId)) return;
   utenti.add(chatId);
 
-  setTimeout(() =>
+  setTimeout(() => {
+    utenti.delete(chatId);
+  }, 5000);
 
   // 👉 accetta ciao o /start
   if (!text || (!text.includes("ciao") && text !== "/start")) return;
