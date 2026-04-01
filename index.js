@@ -2,7 +2,7 @@ const utenti = new Set();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 bot.on("message", async (msg) => {
@@ -42,5 +42,3 @@ bot.on("message", async (msg) => {
     return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
   }
 });
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server attivo su " + PORT));
