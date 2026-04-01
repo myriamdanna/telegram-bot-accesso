@@ -22,6 +22,7 @@ bot.on("message", async (msg) => {
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
+      client_reference_id: chatId,
       line_items: [
         {
           price: "price_1TG1UPKSYfmjXmRwCcfunIZp",
