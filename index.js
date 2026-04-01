@@ -42,3 +42,5 @@ bot.on("message", async (msg) => {
     return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
   }
 });
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Server attivo su " + PORT));
