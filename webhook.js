@@ -1,0 +1,48 @@
+const express = require("express");
+const bodyParser = require("body-parser");
+const TelegramBot = require("node-telegram-bot-api");
+
+const app = express();
+app.use(bodyParser.json());
+
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+const CHANNEL_ID = process.env.CHANNEL_ID;
+
+app.post("/webhook", async (req, res) => {
+  const event = req.body;
+
+  try {
+    if (event.type === "checkout.session.completed") {
+      const telegramId = event.data.object.client_reference_id;
+
+      const inviteLink = await bot.createChatInviteLink(CHANNEL_ID);
+
+      await bot.sendMessage(
+        telegramId,
+        "✅ Pagamento ricevuto! Entra nel canale:",
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: "Entra", url: inviteLink.invite_link }]],
+          },
+        } 
+      );
+    }
+
+    if (
+      event.type === "invoice.payment_failed" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      const telegramId = event.data.object.client_reference_id;
+
+      await bot.banChatMember(CHANNEL_ID, telegramId);
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.log(err);
+    res.sendStatus(500);
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Webhook attivo"));
