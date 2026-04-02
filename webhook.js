@@ -15,8 +15,15 @@ app.post("/webhook", async (req, res) => {
     if (event.type === "checkout.session.completed") {
       const telegramId = event.data.object.client_reference_id;
 
-      const inviteLink = await bot.createChatInviteLink(CHANNEL_ID);
+      const invite = await bot.createChatInviteLink(CHANNEL_ID, {
+        member_limit: 1,
+        name: `user_${telegramId}`,
+      });
 
+      const inviteLink = invite.invite_link;
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       await bot.sendMessage(
         telegramId,
         "✅ Pagamento ricevuto! Entra nel canale:",
