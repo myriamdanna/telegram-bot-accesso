@@ -29,7 +29,7 @@ app.post("/webhook", async (req, res) => {
         "✅ Pagamento ricevuto! Entra nel canale:",
         {
           reply_markup: {
-            inline_keyboard: [[{ text: "Entra", url: inviteLink.invite_link }]],
+            inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
           },
         } 
       );
