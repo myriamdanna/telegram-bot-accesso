@@ -29,8 +29,8 @@ bot.on("message", async (msg) => {
           quantity: 1,
         },
       ],
-      success_url: "https://t.me/google.com",
-      cancel_url: "https://t.me/google.com",
+      success_url: "https://t.me",
+      cancel_url: "https://t.me",
     });
 
     return bot.sendMessage(
