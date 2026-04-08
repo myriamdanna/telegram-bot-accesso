@@ -54,7 +54,7 @@ app.post("/webhook", async (req, res) => {
          } 
       
          if (!telegramId) { 
-           console.log("X telegramId NON trovato");
+           console.log("❌ telegramId NON trovato");
            return; 
          }
         
