@@ -22,13 +22,22 @@ bot.on("message", async (msg) => {
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
+      
       client_reference_id: chatId,
+      
+      customer_creation: "always",
+
+      metadata: {
+        telegramId: chatId.toString(), 
+      },
+        
       line_items: [
         {
           price: "price_1TG1UPKSYfmjXmRwCcfunIZp",
           quantity: 1,
         },
       ],
+      
       success_url: "https://t.me",
       cancel_url: "https://t.me",
     });
