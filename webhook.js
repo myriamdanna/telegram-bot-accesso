@@ -39,9 +39,25 @@ app.post("/webhook", async (req, res) => {
       event.type === "invoice.payment_failed" ||
       event.type === "customer.subscription.deleted"
     ) {
-      const telegramId = event.data.object.client_reference_id;
+      let telegramId = 
+        event.data.object.client_reference_id ||
+        event.data.object.metadata?.telegramId;
 
-      try {
+      try { 
+        // fallback: recupero da customer Stripe
+        if (!telegramId && event.data.object.customer) { 
+          const customer = await stripe.customers.retrieve(
+            event.data.object.customer
+          );
+
+          telegramId = customer.metadata?.telegramId;
+         } 
+      
+         if (!telegramId) { 
+           console.log("X telegramId NON trovato");
+           return; 
+         }
+        
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
