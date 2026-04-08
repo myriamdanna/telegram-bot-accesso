@@ -48,7 +48,11 @@ bot.on("message", async (msg) => {
     );
 
   } catch (error) {
-    console.log("ERRORE STRIPE:", error);
+    console.log("❌ ERRORE STRIPE COMPLETO:");
+    console.log(error);
+    console.log(error.message);
+    console.log(error.raw);
+    
     return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
   }
 });
