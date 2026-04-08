@@ -41,7 +41,14 @@ app.post("/webhook", async (req, res) => {
     ) {
       const telegramId = event.data.object.client_reference_id;
 
-      await bot.banChatMember(CHANNEL_ID, telegramId);
+      try {
+        await bot.banChatMember(CHANNEL_ID, telegramId);
+        await bot.unbanChatMember(CHANNEL_ID, telegramId);
+
+        console.log ('Utente ${telegramId} rimosso dal canale');
+      } catch (err) {
+        console.error("Errore rimozione utente:", err);
+      }
     }
 
     res.sendStatus(200);
