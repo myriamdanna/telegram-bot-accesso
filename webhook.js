@@ -40,8 +40,8 @@ app.post("/webhook", async (req, res) => {
       event.type === "customer.subscription.deleted"
     ) {
       let telegramId = 
-        event.data.object.client_reference_id ||
-        event.data.object.metadata?.telegramId;
+        Number(event.data.object.client_reference_id) ||
+        Number(event.data.object.metadata?.telegramId);
 
       try { 
         // fallback: recupero da customer Stripe
@@ -50,7 +50,7 @@ app.post("/webhook", async (req, res) => {
             event.data.object.customer
           );
 
-          telegramId = customer.metadata?.telegramId;
+          telegramId = Number(customer.metadata?.telegramId);
          } 
       
          if (!telegramId) { 
