@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const ADMIN = 1192463575;
+const ADMIN_ID = 1192463575;
 
 app.post("/webhook", async (req, res) => {
   const event = req.body;
