@@ -14,6 +14,8 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 app.post("/webhook", async (req, res) => {
   const event = req.body;
 
+  console.log("EVENT RICEVUTO:", event.type);
+
   try {
     if (event.type === "checkout.session.completed") {
       const telegramId = event.data.object.client_reference_id;
