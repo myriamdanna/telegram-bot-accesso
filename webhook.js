@@ -10,6 +10,7 @@ app.use(bodyParser.json());
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
 const CHANNEL_ID = process.env.CHANNEL_ID;
+const ADMIN = 1192463575;
 
 app.post("/webhook", async (req, res) => {
   const event = req.body;
@@ -20,6 +21,12 @@ app.post("/webhook", async (req, res) => {
     if (event.type === "checkout.session.completed") {
       const telegramId = event.data.object.client_reference_id;
 
+      // NOTIFICA ADMIN
+      await bot.sendMessage(
+        ADMIN_ID,
+        `✅ Nuovo abbonamento!\nUtente Telegram ID: ${telegramId}`
+      );
+      
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
         member_limit: 1,
         name: `user_${telegramId}`,
@@ -47,6 +54,12 @@ app.post("/webhook", async (req, res) => {
       let telegramId = 
         Number(event.data.object.client_reference_id) ||
         Number(event.data.object.metadata?.telegramId);
+
+      //NOTIFICA ADMIN
+      await bot.sendMessage(
+        ADMIN_ID,
+        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+      );
 
       try { 
         // fallback: recupero da customer Stripe
