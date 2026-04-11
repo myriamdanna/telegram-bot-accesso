@@ -69,7 +69,7 @@ app.post("/webhook", async (req, res) => {
       event.type === "invoice.payment_failed"
     ) {
       let metadata = {};
-      let telegramId
+      let telegramId;
 
       //CASO 1: SUBSCRIPTION CANCELLATA
       if event.type === "customer.subscription.deleted"  ) {
@@ -85,7 +85,7 @@ app.post("/webhook", async (req, res) => {
                 
         telegramId = 
           Number(metadata.telegram_id) ||
-          Number(event.data.object.client_reference_id);
+          Number(subscription.client_reference_id);
       }
 
         // CASO 2: PAGAMENTO FALLITO
