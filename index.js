@@ -26,7 +26,9 @@ bot.on("message", async (msg) => {
       client_reference_id: chatId,
       
       metadata: {
-        telegramId: chatId.toString(), 
+        telegram_id: chatId.toString(),
+        telegram_username: msg.from.username ||
+        telegram_name: msg.from.first_name ||
       },
         
       line_items: [
