@@ -50,17 +50,18 @@ try {
 
     await new Promise(resolve => setTimeout(resolve, 1000));
 
+    // INVIA LINK UTENTE
     await bot.sendMessage(
       telegramId,
       "✅ Pagamento ricevuto! Entra nel canale:",
       {
-        reply_markup: {
-          inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
-        },
-      }
+         reply_markup: {
+           inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
+         },
+       }
     );
 
-    // notifica admin
+    // NOTIFICA ADMIN
     await bot.sendMessage(
       ADMIN_ID,
       `✅ Nuovo abbonamento!\nUtente: ${display}`
@@ -72,11 +73,10 @@ try {
     event.type === "customer.subscription.deleted" ||
     event.type === "invoice.payment_failed"
   ) {
-
     let metadata = {};
     let telegramId;
 
-    // CASO 1: subscription cancellata
+    // CASO 1: SUBSCRIPTION CANCELLATA
     if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
     
@@ -92,7 +92,7 @@ try {
         Number(subscription.client_reference_id);
     }
 
-    // CASO 2: pagamento fallito
+    // CASO 2: PAGAMENTO FALLITO
     if (event.type === "invoice.payment_failed") {
       const invoice = event.data.object;
 
@@ -104,51 +104,47 @@ try {
       telegramId = Number(metadata.telegram_id);
     }
 
-    const username = metadata.telegram_username;
-    const name = metadata.telegram_name;
-
-    const display = username
-      ? `@${username}`
-      : name || telegramId;
-
-    // notifica admin
-    await bot.sendMessage(
-      ADMIN_ID,
-      `❌ Abbonamento terminato!\nUtente: ${display}`
+    // fallback: recupero da customer Stripe
+    if (!telegramId && event.data.object.customer) { 
+      const customer = await stripe.customers.retrieve(
+      event.data.object.customer
     );
+
+    telegramId = Number(customer.metadata?.telegram_id) || telegramId;  
+  } 
+
+  if (!telegramId) { 
+    console.log("❌ telegramId NON trovato");
+    return res.sendstatus (200);   
   }
 
-} catch (error) {
-console.error("Errore webhook:", error);
-}
+  // RIMUOVI DAL CANALE
+  await bot.banChatMember(CHANNEL_ID, telegramId);
+  await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
-res.sendStatus(200);
-}
+  console.log (`Utente ${telegramId} rimosso dal canale`);
+    
+  const username = metadata.telegram_username;
+  const name = metadata.telegram_name;
 
-// fallback: recupero da customer Stripe
-if (!telegramId && event.data.object.customer) { 
-  const customer = await stripe.customers.retrieve(
-    event.data.object.customer
+  const display = username
+    ? `@${username}`
+    : name || telegramId;
+
+  // notifica admin
+  await bot.sendMessage(
+    ADMIN_ID,
+    `❌ Abbonamento terminato!\nUtente: ${display}`
   );
-
-  telegramId = Number(customer.metadata?.telegram_id) || telegramId;
-} 
-      
-if (!telegramId) { 
-  console.log("❌ telegramId NON trovato");
-  return; 
 }
-        
-await bot.banChatMember(CHANNEL_ID, telegramId);
-await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
-console.log (`Utente ${telegramId} rimosso dal canale`);
- 
 res.sendStatus(200);
 } catch (err) {
   console.log(err);
   res.sendStatus(500);
 }
+
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
