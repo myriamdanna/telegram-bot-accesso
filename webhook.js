@@ -64,36 +64,58 @@ app.post("/webhook", async (req, res) => {
       );
     }
 
-    if (event.type === "customer.subscription.deleted") {
+    if (
+      event.type === "customer.subscription.deleted" ||
+      event.type === "invoice.payment_failed"
+    ) {
+      let metadata = {};
+      let telegramId
 
-      const subscription = event.data.object;
+      //CASO 1: SUBSCRIPTION CANCELLATA
+      if event.type === "customer.subscription.deleted"  ) {
+        const subscription = event.data.object;
 
-      let metadata = subscription.metadata || {};
+        metadata = subscription.metadata || {};
       
-      // FIX: se metadata manca, recupera dal customer
-      if (!metadata.telegram_id && subscription.customer) {
-        const customer = await stripe.customers.retrieve(subscription.customer);
-        metadata = customer.metadata || {};
+        // FIX: se metadata manca, recupera dal customer
+        if (!metadata.telegram_id && subscription.customer) {
+          const customer = await stripe.customers.retrieve(subscription.customer);
+          metadata = customer.metadata || {};
+        }
+                
+        telegramId = 
+          Number(metadata.telegram_id) ||
+          Number(event.data.object.client_reference_id);
       }
-        
-      let telegramId = 
-        Number(metadata.telegram_id) ||
-        Number(event.data.object.client_reference_id);
 
-      //PRENDI USERNAME E NOME
-      const username = metadata?.telegram_username;
-      const name = metadata?.telegram_name;
+        // CASO 2: PAGAMENTO FALLITO
+        if (event.type === "invoice.payment.failed") {
+          const invoice = event.data.object;
+
+          if (invoice.customer)  { 
+            const customer = await stripe.customers.retrieve(invoice.customer);
+            metadata = customer.metadata || {};
+          }
+
+          telegramId = Number(metadata.telegram_id);
+        
+        }
+      
+        //PRENDI USERNAME E NOME
+        const username = metadata?.telegram_username;
+        const name = metadata?.telegram_name;
     
-      //COSTRUISCI DISPLAY
-      const display = username
-        ? `@${username}`
-        : name || telegramId;
+        //COSTRUISCI DISPLAY
+        const display = username
+          ? `@${username}`
+          : name || telegramId;
       
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
         `❌ Abbonamento terminato!\nUtente: ${display}`
       );
+    } 
 
       try { 
         // fallback: recupero da customer Stripe
