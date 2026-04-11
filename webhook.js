@@ -20,9 +20,9 @@ app.post("/webhook", async (req, res) => {
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
+      
       const telegramId = session.client_reference_id;
-
-      const metadata = session.metadata;
+      const metadata = session.metadata || {};
 
       const username = metadata?.telegram_username;
       const name = metadata?.telegram_name;
@@ -31,19 +31,14 @@ app.post("/webhook", async (req, res) => {
         ? `@${username}`
         : name || telegramId;
 
-      // QUESTO E' IL FIX
+      // SALVA METADATA NELLA SUBSCRIPTION
       if (session.subscription) {
         await stripe.subscriptions.update(session.subscription, {
           metadata: session.metadata
          });
       }
-      
-      // NOTIFICA ADMIN
-      await bot.sendMessage(
-        ADMIN_ID,
-        `✅ Nuovo abbonamento!\nUtente: ${display}`
-      );
-      
+
+      // CREA INVITO 
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
         member_limit: 1,
         name: `user_${telegramId}`,
@@ -62,8 +57,15 @@ app.post("/webhook", async (req, res) => {
           },
         } 
       );
+
+      // NOTIFICA ADMIN
+      await bot.sendMessage(
+        ADMIN_ID,
+        `✅ Nuovo abbonamento!\nUtente: ${display}`
+      );
     }
 
+    // CANCELLAZIONE PAGAMENTO FALLITO
     if (
       event.type === "customer.subscription.deleted" ||
       event.type === "invoice.payment_failed"
@@ -98,7 +100,6 @@ app.post("/webhook", async (req, res) => {
           }
 
           telegramId = Number(metadata.telegram_id);
-        
         }
       
         //PRENDI USERNAME E NOME
