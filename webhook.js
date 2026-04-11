@@ -72,7 +72,7 @@ app.post("/webhook", async (req, res) => {
       let telegramId;
 
       //CASO 1: SUBSCRIPTION CANCELLATA
-      if event.type === "customer.subscription.deleted"  ) {
+      if (event.type === "customer.subscription.deleted"  ) {
         const subscription = event.data.object;
 
         metadata = subscription.metadata || {};
