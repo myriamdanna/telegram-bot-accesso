@@ -52,6 +52,9 @@ app.post("/webhook", async (req, res) => {
         Number(event.data.object.client_reference_id) ||
         Number(event.data.object.metadata?.telegramId);
 
+      let username =
+        event.data.object.metadata?.username || "";
+
       try { 
         // fallback: recupero da customer Stripe
         if (!telegramId && event.data.object.customer) { 
@@ -60,6 +63,7 @@ app.post("/webhook", async (req, res) => {
           );
 
           telegramId = Number(customer.metadata?.telegramId);
+          username = customer.metadata?.username || username;
          } 
         } catch (err) { 
           console.log("Errore recuypero customer:", err.message);
@@ -74,7 +78,7 @@ app.post("/webhook", async (req, res) => {
         // NOTIFICA ADMIN
         await bot.sendMessage(
           ADMIN_ID,
-          `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+          `❌ Abbonamento terminato!\nUtente: ${username ? "@" + username : telegramId}`
         );
       } 
                   
