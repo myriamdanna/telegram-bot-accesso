@@ -55,6 +55,7 @@ app.post("/webhook", async (req, res) => {
       let username =
         event.data.object.metadata?.username || "";
 
+      // FALLBACK RECUPERO DA CUSTOMER STRIPE
       try { 
         // fallback: recupero da customer Stripe
         if (!telegramId && event.data.object.customer) { 
@@ -80,8 +81,8 @@ app.post("/webhook", async (req, res) => {
           ADMIN_ID,
           `❌ Abbonamento terminato!\nUtente: ${username ? "@" + username : telegramId}`
         );
-      } 
-                  
+
+        // RIMOZIONE UTENTE DAL CANALE
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
@@ -100,11 +101,3 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
-
-
-
- //NOTIFICA ADMIN
-      await bot.sendMessage(
-        ADMIN_ID,
-        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
-      );
