@@ -60,14 +60,25 @@ app.post("/webhook", async (req, res) => {
       event.type === "invoice.payment_failed" ||
       event.type === "customer.subscription.deleted"
     ) {
+      const metadata = event.data.object.metadata || {};
+      
       let telegramId = 
         Number(event.data.object.client_reference_id) ||
-        Number(event.data.object.metadata?.telegramId);
+        Number(metadata.telegram_id);
 
+      //PRENDI USERNAME E NOME
+      const username = metadata?.telegram_username;
+      const name = metadata?.telegram_name;
+    
+      //COSTRUISCI DISPLAY
+      const display = username
+        ? `@${username}`
+        : name || telegramId;
+      
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+        `❌ Abbonamento terminato!/nUtente: ${display}`
       );
 
       try { 
@@ -77,7 +88,7 @@ app.post("/webhook", async (req, res) => {
             event.data.object.customer
           );
 
-          telegramId = Number(customer.metadata?.telegramId);
+          telegramId = Number(customer.metadata?.telegram_id);
          } 
       
          if (!telegramId) { 
