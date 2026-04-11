@@ -63,7 +63,6 @@ app.post("/webhook", async (req, res) => {
         } 
       );
     }
-  }
 
     if (
       event.type === "customer.subscription.deleted" ||
