@@ -69,35 +69,33 @@ app.post("/webhook", async (req, res) => {
         } catch (err) { 
           console.log("Errore recuypero customer:", err.message);
         } 
-
-        // CONTROLLO 
-        if (!telegramId) { 
+      } 
+    
+      // CONTROLLO 
+      if (!telegramId) { 
            console.log("❌ telegramId NON trovato");
            return; 
-         }
+      }
 
-        // NOTIFICA ADMIN
-        await bot.sendMessage(
-          ADMIN_ID,
-          `❌ Abbonamento terminato!\nUtente: ${username ? "@" + username : telegramId}`
-        );
+      // NOTIFICA ADMIN
+      await bot.sendMessage(
+        ADMIN_ID,
+        `❌ Abbonamento terminato!\nUtente: ${username ? "@" + username : telegramId}`
+      );
 
-        // RIMOZIONE UTENTE DAL CANALE
-        await bot.banChatMember(CHANNEL_ID, telegramId);
-        await bot.unbanChatMember(CHANNEL_ID, telegramId);
+      // RIMOZIONE UTENTE DAL CANALE
+      await bot.banChatMember(CHANNEL_ID, telegramId);
+      await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
-        console.log ('Utente ${telegramId} rimosso dal canale');
-      } catch (err) {
-        console.error("Errore rimozione utente:", err);
+      console.log ('Utente ${telegramId} rimosso dal canale');
+     }
+     res.sendStatus(200);
+  
+   } catch (err) {
+     console.error("Errore rimozione utente:", err);
+     res.sendStatus(500);
       }
     }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.log(err);
-    res.sendStatus(500);
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
