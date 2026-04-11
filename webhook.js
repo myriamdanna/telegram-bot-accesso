@@ -65,9 +65,17 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (event.type === "customer.subscription.deleted") {
+
+      const subscription = event.data.object;
+
+      let metadata = subscription.metadata || {};
       
-      const metadata = event.data.object.metadata || {};
-      
+      // FIX: se metadata manca, recupera dal customer
+      if (!metadata.telegram_id && subscription.customer) {
+        const customer = await stripe.customers.retrieve(subscription.customer);
+        metadata = customer.metadata || {};
+      }
+        
       let telegramId = 
         Number(metadata.telegram_id) ||
         Number(event.data.object.client_reference_id);
