@@ -28,7 +28,7 @@ bot.on("message", async (msg) => {
       metadata: {
         telegram_id: chatId.toString(),
         telegram_username: msg.from.username ||
-        telegram_name: msg.from.first_name ||
+        telegram_name: ${msg.from.first_name || ${msg.from.last_name ||  } .trim
       },
         
       line_items: [
