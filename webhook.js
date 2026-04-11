@@ -123,7 +123,7 @@ console.error("Errore webhook:", error);
 }
 
 res.sendStatus(200);
-};
+}
 
 // fallback: recupero da customer Stripe
 if (!telegramId && event.data.object.customer) { 
