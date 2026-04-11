@@ -21,10 +21,19 @@ app.post("/webhook", async (req, res) => {
     if (event.type === "checkout.session.completed") {
       const telegramId = event.data.object.client_reference_id;
 
+      const metadata = event.data.object.metadata;
+
+      const username = metadata?.telegram_username;
+      const name = metadata?.telegram_name;
+
+      const display = username
+        ? `@${username}`
+        : name || telegramId;
+
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `✅ Nuovo abbonamento!\nUtente Telegram ID: ${telegramId}`
+        `✅ Nuovo abbonamento!\nUtente: ${display}`
       );
       
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
