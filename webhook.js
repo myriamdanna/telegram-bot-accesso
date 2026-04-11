@@ -47,19 +47,10 @@ app.post("/webhook", async (req, res) => {
       );
     }
 
-    if (
-      event.type === "invoice.payment_failed" ||
-      event.type === "customer.subscription.deleted"
-    ) {
+    if (event.type === "customer.subscription.deleted") {
       let telegramId = 
         Number(event.data.object.client_reference_id) ||
         Number(event.data.object.metadata?.telegramId);
-
-      //NOTIFICA ADMIN
-      await bot.sendMessage(
-        ADMIN_ID,
-        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
-      );
 
       try { 
         // fallback: recupero da customer Stripe
@@ -70,12 +61,23 @@ app.post("/webhook", async (req, res) => {
 
           telegramId = Number(customer.metadata?.telegramId);
          } 
-      
-         if (!telegramId) { 
+        } catch (err) { 
+          console.log("Errore recuypero customer:", err.message);
+        } 
+
+        // CONTROLLO 
+        if (!telegramId) { 
            console.log("❌ telegramId NON trovato");
            return; 
          }
-        
+
+        // NOTIFICA ADMIN
+        await bot.sendMessage(
+          ADMIN_ID,
+          `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+        );
+      } 
+                  
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
@@ -94,3 +96,11 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
+
+
+
+ //NOTIFICA ADMIN
+      await bot.sendMessage(
+        ADMIN_ID,
+        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+      );
