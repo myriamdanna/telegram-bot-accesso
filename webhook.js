@@ -19,9 +19,10 @@ app.post("/webhook", async (req, res) => {
 
   try {
     if (event.type === "checkout.session.completed") {
-      const telegramId = event.data.object.client_reference_id;
+      const session = event.data.object;
+      const telegramId = session.client_reference_id;
 
-      const metadata = event.data.object.metadata;
+      const metadata = session.metadata;
 
       const username = metadata?.telegram_username;
       const name = metadata?.telegram_name;
@@ -30,6 +31,13 @@ app.post("/webhook", async (req, res) => {
         ? `@${username}`
         : name || telegramId;
 
+      // QUESTO E' IL FIX
+      if (session.subscription) {
+        await stripe.subscriptions.update(session.subscription, {
+          metadata: session.metadata
+         });
+      }
+      
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
@@ -56,15 +64,13 @@ app.post("/webhook", async (req, res) => {
       );
     }
 
-    if (
-      event.type === "invoice.payment_failed" ||
-      event.type === "customer.subscription.deleted"
-    ) {
+    if (event.type === "customer.subscription.deleted") {
+      
       const metadata = event.data.object.metadata || {};
       
       let telegramId = 
-        Number(event.data.object.client_reference_id) ||
-        Number(metadata.telegram_id);
+        Number(metadata.telegram_id) ||
+        Number(event.data.object.client_reference_id);
 
       //PRENDI USERNAME E NOME
       const username = metadata?.telegram_username;
@@ -78,7 +84,7 @@ app.post("/webhook", async (req, res) => {
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `❌ Abbonamento terminato!/nUtente: ${display}`
+        `❌ Abbonamento terminato!\nUtente: ${display}`
       );
 
       try { 
@@ -88,7 +94,7 @@ app.post("/webhook", async (req, res) => {
             event.data.object.customer
           );
 
-          telegramId = Number(customer.metadata?.telegram_id);
+          telegramId = Number(customer.metadata?.telegram_id) || telegramId;
          } 
       
          if (!telegramId) { 
