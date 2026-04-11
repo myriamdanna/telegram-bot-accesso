@@ -26,11 +26,19 @@ bot.on("message", async (msg) => {
       client_reference_id: chatId,
       
       metadata: {
-        telegram_id: chatId.toString(),
-        telegram_username: msg.from.username || '',
-        telegram_name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
+        telegramId: chatId.toString(),
+        username: msg.from.username || '',
+        name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
       },
-        
+
+      subsrciption_data: {
+        metadata: {
+          telegramId: chatId.toString(),
+          username: msg.from.username || "",
+          name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
+        }
+      },
+          
       line_items: [
         {
           price: "price_1TG1UPKSYfmjXmRwCcfunIZp",
