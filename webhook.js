@@ -47,15 +47,20 @@ app.post("/webhook", async (req, res) => {
       );
     }
 
-    if (event.type === "customer.subscription.deleted") {
+    if (
+      event.type === "invoice.payment_failed" ||
+      event.type === "customer.subscription.deleted"
+    ) {
       let telegramId = 
         Number(event.data.object.client_reference_id) ||
         Number(event.data.object.metadata?.telegramId);
 
-      let username =
-        event.data.object.metadata?.username || "";
+      //NOTIFICA ADMIN
+      await bot.sendMessage(
+        ADMIN_ID,
+        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+      );
 
-      // FALLBACK RECUPERO DA CUSTOMER STRIPE
       try { 
         // fallback: recupero da customer Stripe
         if (!telegramId && event.data.object.customer) { 
@@ -64,38 +69,28 @@ app.post("/webhook", async (req, res) => {
           );
 
           telegramId = Number(customer.metadata?.telegramId);
-          username = customer.metadata?.username || username;
          } 
-        } catch (err) { 
-          console.log("Errore recuypero customer:", err.message);
-        } 
-      } 
-    
-      // CONTROLLO 
-      if (!telegramId) { 
+      
+         if (!telegramId) { 
            console.log("❌ telegramId NON trovato");
            return; 
-      }
+         }
+        
+        await bot.banChatMember(CHANNEL_ID, telegramId);
+        await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
-      // NOTIFICA ADMIN
-      await bot.sendMessage(
-        ADMIN_ID,
-        `❌ Abbonamento terminato!\nUtente: ${username ? "@" + username : telegramId}`
-      );
-
-      // RIMOZIONE UTENTE DAL CANALE
-      await bot.banChatMember(CHANNEL_ID, telegramId);
-      await bot.unbanChatMember(CHANNEL_ID, telegramId);
-
-      console.log ('Utente ${telegramId} rimosso dal canale');
-     }
-     res.sendStatus(200);
-  
-   } catch (err) {
-     console.error("Errore rimozione utente:", err);
-     res.sendStatus(500);
+        console.log ('Utente ${telegramId} rimosso dal canale');
+      } catch (err) {
+        console.error("Errore rimozione utente:", err);
       }
     }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.log(err);
+    res.sendStatus(500);
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
