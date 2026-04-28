@@ -25,6 +25,8 @@ bot.on("message", async (msg) => {
   
       client_reference_id: chatId,
 
+      customer_creation: 'always', 
+
       customer_data: {
         metadata: {
           telegramId: chatId.toString(),
