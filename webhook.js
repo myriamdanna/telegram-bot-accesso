@@ -19,17 +19,38 @@ app.post("/webhook", async (req, res) => {
 
   try {
     if (event.type === "checkout.session.completed") {
-      const telegramId = event.data.object.client_reference_id;
+      const session = event.data.object;
 
+      let telegramId =
+        Number(session.client_reference_id) ||
+        Number(session.metadata?.telegramId) ||
+        null;
+
+      let username = session.metadata?.username || "";
+
+      if ((!telegramId || !username) && session.customer) {
+        const customer = await stripe.customers.retrieve(session.customer);
+
+        if (!telegramId) {
+          telegramId = Number(customer.metadata?.telegramId);
+        }
+
+         if (!username) {
+          username = customer.metadata?.username;
+         }
+        } 
+        
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `✅ Nuovo abbonamento!\nUtente Telegram ID: ${telegramId}`
+        `✅ Nuovo abbonamento!\nUtente: ${
+          username ? "@" + username : telegramId
+          }`
       );
       
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
         member_limit: 1,
-        name: `user_${telegramId}`,
+        name: username ? `user_${username}` :  `user_${telegramId}`,
       });
 
       const inviteLink = invite.invite_link;
@@ -51,14 +72,36 @@ app.post("/webhook", async (req, res) => {
       event.type === "invoice.payment_failed" ||
       event.type === "customer.subscription.deleted"
     ) {
-      let telegramId = 
-        Number(event.data.object.client_reference_id) ||
-        Number(event.data.object.metadata?.telegramId);
-
+     
       //NOTIFICA ADMIN
+
+      let telegramId = 
+        Number(event.data.object.client_reference_id) || 
+        Number(event.data.object.metadata?.telegramId);
+      
+      let username = 
+        event.data.object.metadata?.username || "";
+
+      // fallback Stripe PRIMA del messaggio
+      if ((!telegramId || !username) && event.data.object.customer) { 
+          const customer = await stripe.customers.retrieve(
+            event.data.object.customer
+          );
+
+          if (!telegramId) {
+            telegramId = Number(customer.metadata?.telegramId);
+          }
+
+          if (!username) {
+            username = customer.metadata?.username;
+          } 
+       }        
+
+      // INVIO MESSAGGIO
       await bot.sendMessage(
         ADMIN_ID,
-        `❌ Abbonamento terminato!/nUtente: ${telegramId}`
+        `❌ Abbonamento terminato!
+        Utente: ${username ? "@" + username : telegramId}`
       );
 
       try { 
@@ -79,7 +122,7 @@ app.post("/webhook", async (req, res) => {
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
-        console.log ('Utente ${telegramId} rimosso dal canale');
+        console.log(`Utente ${telegramId} rimosso dal canale`);
       } catch (err) {
         console.error("Errore rimozione utente:", err);
       }
