@@ -22,9 +22,7 @@ bot.on("message", async (msg) => {
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-
-      payment_method_types: ["card"], 
-      
+  
       client_reference_id: chatId,
       
       metadata: {
@@ -32,15 +30,7 @@ bot.on("message", async (msg) => {
         username: msg.from.username || '',
         name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
       },
-
-      subsrciption_data: {
-        metadata: {
-          telegramId: chatId.toString(),
-          username: msg.from.username || "",
-          name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
-        }
-      },
-          
+        
       line_items: [
         {
           price: "price_1TG1UPKSYfmjXmRwCcfunIZp",
