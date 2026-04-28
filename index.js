@@ -22,6 +22,8 @@ bot.on("message", async (msg) => {
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
+
+      payment_method_types: ["card"], 
       
       client_reference_id: chatId,
       
