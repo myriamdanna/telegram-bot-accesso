@@ -75,13 +75,28 @@ app.post("/webhook", async (req, res) => {
      
       //NOTIFICA ADMIN
 
-      const subscription = event.data.object
+      let telegramId = 
+        Number(event.data.object.client_reference_id) || 
+        Number(event.data.object.metadata?.telegramId);
+      
+      let username = 
+        event.data.object.metadata?.username || "";
 
-      const customer = await stripe.customers.retrieve(subscription.customer);
+      // fallback Stripe PRIMA del messaggio
+      if ((!telegramId || !username) && event.data.object.customer) { 
+          const customer = await stripe.customers.retrieve(
+            event.data.object.customer
+          );
 
-      const telegramId = Number(customer.metadata?.telegramId);
-      const username = customer.metadata?.username || "";  
-             
+          if (!telegramId) {
+            telegramId = Number(customer.metadata?.telegramId);
+          }
+
+          if (!username) {
+            username = customer.metadata?.username;
+          } 
+       }        
+
       // INVIO MESSAGGIO
       await bot.sendMessage(
         ADMIN_ID,
@@ -89,11 +104,21 @@ app.post("/webhook", async (req, res) => {
         Utente: ${username ? "@" + username : telegramId}`
       );
 
-      if (!telegramId) { 
+      try { 
+        // fallback: recupero da customer Stripe
+        if (!telegramId && event.data.object.customer) { 
+          const customer = await stripe.customers.retrieve(
+            event.data.object.customer
+          );
+
+          telegramId = Number(customer.metadata?.telegramId);
+         } 
+      
+         if (!telegramId) { 
            console.log("❌ telegramId NON trovato");
            return; 
-      }
-      try {          
+         }
+        
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
@@ -112,3 +137,4 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
+
