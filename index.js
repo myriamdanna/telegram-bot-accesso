@@ -25,12 +25,10 @@ bot.on("message", async (msg) => {
   
       client_reference_id: chatId,
 
-      customer_data: {
-        metadata: {
+      metadata: {
           telegramId: chatId.toString(),
           username: msg.from.username || '',
           name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
-        }
       },
         
       line_items: [
