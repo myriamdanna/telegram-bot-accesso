@@ -75,19 +75,17 @@ app.post("/webhook", async (req, res) => {
      
       //NOTIFICA ADMIN
 
-      let telegramId = 
-        Number(event.data.object.client_reference_id) || 
-        Number(event.data.object.metadata?.telegramId);
-      
-      let username = 
-        event.data.object.metadata?.username || "";
+      const subscription = event.data.object
 
+      let customer = await stripe.customers.retrieve(subscription.customer);
+
+      let telegramId = Number(customer.metadata?.telegramId);
+      let username = customer.metadata?.username || "";  
+     
       // fallback Stripe PRIMA del messaggio
       if ((!telegramId || !username) && event.data.object.customer) { 
-          const customer = await stripe.customers.retrieve(
-            event.data.object.customer
-          );
-
+          customer = await stripe.customers.retrieve(subscription.customer);
+            
           if (!telegramId) {
             telegramId = Number(customer.metadata?.telegramId);
           }
