@@ -77,24 +77,11 @@ app.post("/webhook", async (req, res) => {
 
       const subscription = event.data.object
 
-      let customer = await stripe.customers.retrieve(subscription.customer);
+      const customer = await stripe.customers.retrieve(subscription.customer);
 
-      let telegramId = Number(customer.metadata?.telegramId);
-      let username = customer.metadata?.username || "";  
-     
-      // fallback Stripe PRIMA del messaggio
-      if ((!telegramId || !username) && event.data.object.customer) { 
-          customer = await stripe.customers.retrieve(subscription.customer);
-            
-          if (!telegramId) {
-            telegramId = Number(customer.metadata?.telegramId);
-          }
-
-          if (!username) {
-            username = customer.metadata?.username;
-          } 
-       }        
-
+      const telegramId = Number(customer.metadata?.telegramId);
+      const username = customer.metadata?.username || "";  
+             
       // INVIO MESSAGGIO
       await bot.sendMessage(
         ADMIN_ID,
@@ -102,21 +89,11 @@ app.post("/webhook", async (req, res) => {
         Utente: ${username ? "@" + username : telegramId}`
       );
 
-      try { 
-        // fallback: recupero da customer Stripe
-        if (!telegramId && event.data.object.customer) { 
-          const customer = await stripe.customers.retrieve(
-            event.data.object.customer
-          );
-
-          telegramId = Number(customer.metadata?.telegramId);
-         } 
-      
-         if (!telegramId) { 
+      if (!telegramId) { 
            console.log("❌ telegramId NON trovato");
            return; 
-         }
-        
+      }
+      try {          
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
