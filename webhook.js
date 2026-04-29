@@ -22,8 +22,8 @@ app.post("/webhook", async (req, res) => {
       const session = event.data.object;
 
       let telegramId =
-        Number(session.client_reference_id) ||
-        Number(session.metadata?.telegramId) ||
+        session.client_reference_id ||
+        session.metadata?.telegramId ||
         null;
 
       let username = session.metadata?.username || "";
@@ -68,17 +68,16 @@ app.post("/webhook", async (req, res) => {
       );
     }
 
-    if (
-      event.type === "invoice.payment_failed" ||
-      event.type === "customer.subscription.deleted"
-    ) {
+    if (event.type === "customer.subscription.deleted") {
+      if (event.type === "invoice.payment_failed") {
+        console.log("Pagamento fallito");
+        return res.sendStatus(200);
+       }
      
       //NOTIFICA ADMIN
 
-      let telegramId = 
-        Number(event.data.object.client_reference_id) || 
-        Number(event.data.object.metadata?.telegramId);
-      
+      let telegramId = Number(event.data.object.metadata?.telegramId) || null; 
+            
       let username = 
         event.data.object.metadata?.username || "";
 
