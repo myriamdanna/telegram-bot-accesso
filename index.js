@@ -8,6 +8,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
   const chatId = msg.chat.id; 
+  const username = msg.from.username || '';
   
   if (utenti.has(chatId)) return;
   utenti.add(chatId);
@@ -25,10 +26,20 @@ bot.on("message", async (msg) => {
   
       client_reference_id: chatId,
 
+      customer_creation: "always",
+
       metadata: {
           telegramId: chatId.toString(),
           username: msg.from.username || '',
           name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
+      },
+
+      subscription_data: {
+        metadata: {
+          telegramId: chatId.toString(),
+          username: msg.from.username || '',
+          name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
+        }
       },
         
       line_items: [
