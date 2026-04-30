@@ -2,7 +2,7 @@ const utenti = new Set();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.BOT_TOKEN);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 bot.on("message", async (msg) => {
