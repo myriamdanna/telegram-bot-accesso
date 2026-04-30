@@ -25,9 +25,7 @@ bot.on("message", async (msg) => {
       mode: "subscription",
   
       client_reference_id: chatId,
-
-      customer_creation: "always",
-
+ 
       metadata: {
           telegramId: chatId.toString(),
           username: msg.from.username || '',
