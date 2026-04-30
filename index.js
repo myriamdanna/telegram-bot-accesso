@@ -49,8 +49,8 @@ bot.on("message", async (msg) => {
         },
       ],
       
-      success_url: "https://t.me",
-      cancel_url: "https://t.me",
+      success_url: "https://t.me/Myriambot?start=success",
+      cancel_url: "https://t.me/Myriambot?start=cancel",
     });
 
     return bot.sendMessage(
