@@ -42,7 +42,7 @@ app.post("/webhook", async (req, res) => {
            username = customer.metadata?.username || "";
          }
 
-         if (!username) {
+         if (!name) {
            name = customer.metadata?.name || "";
          }
         } 
@@ -75,17 +75,17 @@ app.post("/webhook", async (req, res) => {
 
       //INVIO LINK UTENTE
       if (telegramId) {
-      await bot.sendMessage(
-        telegramId,
-        "✅ Pagamento ricevuto! Entra nel canale:",
-        {
-          reply_markup: {
-            inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
-          },
-        } 
-      );
-    }
-
+        await bot.sendMessage(
+          telegramId,
+          "✅ Pagamento ricevuto! Entra nel canale:",
+          {
+            reply_markup: {
+              inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
+            },
+          } 
+        );
+       }  
+     }   
     //ABBONAMENTO TERMINATO
     if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
@@ -134,9 +134,7 @@ app.post("/webhook", async (req, res) => {
 
         console.log(`Utente ${telegramId} rimosso dal canale`);
       } else {
-        console.log("❌ telegramId NON trovato");
-      
-        console.log(`Utente ${telegramId} rimosso dal canale`);
+        console.log("❌ telegramId NON trovato");     
        } 
      }   
     
