@@ -28,31 +28,27 @@ app.post("/webhook", async (req, res) => {
         null;
 
       let username = session.metadata?.username || "";
-      let name = session.metadata?.name || "";
+      let firstName = session.metadata?.firstName || "";
+      let lastName = session.metadata?.lastName || "";
+      let fullName = session.metadata?.fullName || "";
 
       // FALLBACK CUSTOMER STRIPE
-      if ((!telegramId || !username || !name) && session.customer) {
+      if ((!telegramId || !username || !fullName) && session.customer) {
         const customer = await stripe.customers.retrieve(session.customer);
 
-        if (!telegramId) {
-          telegramId = customer.metadata?.telegramId || null;
-        }
-
-         if (!username) {
-           username = customer.metadata?.username || "";
-         }
-
-         if (!name) {
-           name = customer.metadata?.name || "";
-         }
-        } 
+        telegramId = telegramId || customer.metadata?.telegramId || null;
+        username = username || customer.metadata?.username || "";
+        firstName = firstName || customer.metadata?.firstName || "";
+        lastName = lastName || customer.metadata?.lastName || "";
+        fullName = fullName || customer.metadata?.fullName || `${firstName} ${laststName}`.trim();
+      } 
 
       //NOME FINALE
       const displayName = 
-        username
-          ? "@" + username
-          : name
-          ? name
+        fullName && fullName !== ""
+          ? fullName
+          ; username 
+          ? "@" + username 
           : telegramId || "Sconosciuto";
         
       // NOTIFICA ADMIN
