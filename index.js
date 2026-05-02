@@ -21,6 +21,12 @@ bot.on("message", async (msg) => {
   if (!text || (!text.includes("ciao") && text !== "/start")) return;
 
   try {
+    const firstName = msg.from.first_name || '';
+    const lastName = msg.from.last_name || '';
+    const username = msg.from.username || '';
+
+    const fullName = `${firstName} ${msg.lastName}`.trim();
+    
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
   
@@ -28,15 +34,19 @@ bot.on("message", async (msg) => {
  
       metadata: {
           telegramId: chatId.toString(),
-          username: msg.from.username || '',
-          name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
+          username: username,
+          firstName: firstName,
+          lastName: lastName,
+          fullName: fullName
       },
 
       subscription_data: {
         metadata: {
           telegramId: chatId.toString(),
-          username: msg.from.username || '',
-          name: `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim()
+          username: username,
+          firstName: firstName,
+          lastName: lastName,
+          fullName: fullName
         }
       },
         
