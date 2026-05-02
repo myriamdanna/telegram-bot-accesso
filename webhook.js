@@ -47,7 +47,7 @@ app.post("/webhook", async (req, res) => {
       const displayName = 
         fullName && fullName !== ""
           ? fullName
-          ; username 
+          : username 
           ? "@" + username 
           : telegramId || "Sconosciuto";
         
