@@ -60,7 +60,7 @@ app.post("/webhook", async (req, res) => {
       //INVITO CANALE
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
         creates_join_request: true,
-        member_limit: 1,
+        
         expire_date: Math.floor(Date.now() / 1000) + 300,
         name: username 
           ? `user_${username}` 
