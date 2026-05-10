@@ -40,7 +40,7 @@ app.post("/webhook", async (req, res) => {
         username = username || customer.metadata?.username || "";
         firstName = firstName || customer.metadata?.firstName || "";
         lastName = lastName || customer.metadata?.lastName || "";
-        fullName = fullName || customer.metadata?.fullName || `${firstName} ${laststName}`.trim();
+        fullName = fullName || customer.metadata?.fullName || `${firstName} ${lastName}`.trim();
       } 
 
       //NOME FINALE
@@ -88,10 +88,12 @@ app.post("/webhook", async (req, res) => {
     if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
 
+      let firstName = subscription.metadata?.firstName || "";
+      let lastName = subscription.metadata?.lastName || "";
+      let fullName = subscription.metadata?.fullName || "";
       let telegramId = subscription.metadata?.telegramId || null;
       let username = subscription.metadata?.username || "";
-      let name = subscription.metadata?.name || "";
-
+      
       //FALLBACK CUSTOMER STRIPE
       if ((!telegramId || !username || !name) && subscription.customer) {
         const customer = await stripe.customers.retrieve (
@@ -106,19 +108,28 @@ app.post("/webhook", async (req, res) => {
           username = customer.metadata?.username || "";
         }
 
-        if (!name) {
-          name = customer.metadata?.name || "";
+        if (!firstName) {
+          firstName = customer.metadata?.firstName || "";
         } 
+
+         if (!lastName) {
+          lastName = customer.metadata?.lastName || "";
+        } 
+
+         if (!fullName) {
+          fullName = customer.metadata?.fullName || 
+          `${firstName} ${lastName}`.trim();
+         } 
       }
 
       //NOME FINALE
-      const displayName = 
-        username
-          ? "@" + username
-          : name
-          ? name
-          : telegramId || "Sconosciuto";
-               
+      const displayName = [
+          fullName,
+          username ? `(@{$username})` : null
+      ]
+          .filter(Boolean)
+          .join(" ");
+      
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
