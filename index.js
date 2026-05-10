@@ -25,7 +25,9 @@ bot.on("message", async (msg) => {
     const lastName = msg.from.last_name || '';
     const username = msg.from.username || '';
 
-    const fullName = `${firstName} ${msg.lastName}`.trim();
+    const fullName = [firstName, lastName]
+      .filter(Boolean)
+      .join(" ");
     
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
