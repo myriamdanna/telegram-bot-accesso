@@ -44,13 +44,13 @@ app.post("/webhook", async (req, res) => {
       } 
 
       //NOME FINALE
-      const displayName = 
-        fullName && fullName !== ""
-          ? fullName
-          : username 
-          ? "@" + username 
-          : telegramId || "Sconosciuto";
-        
+      const displayName = [
+          fullName,
+          username ? `(@{$username})` : null
+      ]
+          .filter(Boolean)
+          .join(" ");
+                  
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
