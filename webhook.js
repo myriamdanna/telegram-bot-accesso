@@ -44,13 +44,15 @@ app.post("/webhook", async (req, res) => {
       } 
 
       //NOME FINALE
-      const displayName = [
-          fullName,
-          username ? `(@{$username})` : null
-      ]
-          .filter(Boolean)
-          .join(" ");
-                  
+      const displayName = 
+          fullName && username 
+          ? `${fullName} (@${username})`
+          : fullName
+          ? fullName
+          : username
+          ? `@${username}`
+          : "Sconosciuto";
+                        
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
@@ -123,13 +125,15 @@ app.post("/webhook", async (req, res) => {
       }
 
       //NOME FINALE
-      const displayName = [
-          fullName,
-          username ? `(@{$username})` : null
-      ]
-          .filter(Boolean)
-          .join(" ");
-      
+      const displayName = 
+          fullName && username 
+          ? `${fullName} (@${username})`
+          : fullName
+          ? fullName
+          : username
+          ? `@${username}`
+          : "Sconosciuto";
+
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
