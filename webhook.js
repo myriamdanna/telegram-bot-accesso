@@ -8,7 +8,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const app = express();
 app.use(bodyParser.json());
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+const bot = new TelegramBot(process.env.BOT_TOKEN);
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const ADMIN_ID = 1192463575;
 
