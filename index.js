@@ -77,3 +77,61 @@ bot.on("message", async (msg) => {
     return bot.sendMessage(chatId, "❌ Errore pagamento, riprova");
   }
 });
+
+bot.on("chat_join_request", async (msg) => {
+  try {
+    
+    const requestUserId = msg.from.id.toString();
+    console.log("Richiesta accesso:", requestUserId);
+
+    // CERCA ABBONAMENTI ATTIVI
+
+    const subscriptions = await stripe.subscriptions.list({
+      status: "active",
+      limit: 100,
+    });
+
+    let autorizzato = false;
+
+    for (const sub of subscriptions.data) {
+
+      if (
+        sub.metadata &&
+        sub.metadata.telegramId === requestUserId
+      ) {
+        autorizzato = true;
+        break;
+      }
+    }
+
+    // APPROVA ACCESSO
+
+    if (autorizzato) {
+      
+      await bot.approveChatJoinRequest(
+        CHANNEL_ID,
+        requestUserId
+      );
+
+      console.log("ACCESSO APPROVATO");
+
+    } else {
+
+      // RIFIUTA ACCESSO
+
+      await bot.declineChatJoinRequest(
+        CHANNEL_ID,
+        requestUserId
+      );
+
+      console.log("ACCESSO NEGATO");
+
+    }
+
+    } catch (err) {
+
+      console.log(err);
+
+    } 
+
+  });
