@@ -100,7 +100,7 @@ app.post("/webhook", async (req, res) => {
       let username = subscription.metadata?.username || "";
       
       //FALLBACK CUSTOMER STRIPE
-      if ((!telegramId || !username || !name) && subscription.customer) {
+      if (subscription.customer) {
         const customer = await stripe.customers.retrieve (
           subscription.customer
         );
