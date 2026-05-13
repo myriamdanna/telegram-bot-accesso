@@ -61,9 +61,9 @@ app.post("/webhook", async (req, res) => {
 
       //INVITO CANALE
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
-        creates_join_request: true,
-        
-        expire_date: Math.floor(Date.now() / 1000) + 300,
+                
+        expire_date: Math.floor(Date.now() / 1000) + 60,
+        member_limit: 1,
         name: username 
           ? `user_${username}` 
           : `user_${telegramId}`,
@@ -141,7 +141,7 @@ app.post("/webhook", async (req, res) => {
       );
 
       //RIMOZIONE DAL CANALE
-      if (!telegramId) { 
+      if (telegramId) { 
         await bot.banChatMember(CHANNEL_ID, telegramId);
         await bot.unbanChatMember(CHANNEL_ID, telegramId);
 
