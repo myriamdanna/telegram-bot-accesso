@@ -88,7 +88,103 @@ app.post("/webhook", async (req, res) => {
           } 
         );
        }  
-     }   
+     }  
+
+   //RINNOVO ABBONAMENTO PAGATO
+    if (event.type === "invoice.paid") {
+      const invoice = event.data.object;
+
+      if (invoice.billing_reason === "subscription_cycle") {
+        const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+        const customer = await stripe.customers.retrieve(invoice.customer);
+
+        let username =
+          subscription.metadata?.username ||
+          customer.metadata?.username ||
+          "";
+
+        let firstName =
+          subscription.metadata?.firstName ||
+          customer.metadata?.firstName ||
+          "";
+
+        let lastName =
+          subscription.metadata?.lastName ||
+          customer.metadata?.lastName ||
+          "";
+
+        let fullName =
+          subscription.metadata?.fullName ||
+          customer.metadata?.fullName ||
+          `${firstName} ${lastName}`.trim();
+
+        const displayName =
+          fullName && username
+            ? `${fullName} (@${username})`
+            : fullName
+            ? fullName
+            : username
+            ? `@${username}`
+            : "Sconosciuto";
+
+        const amount = (invoice.amount_paid / 100)
+          .toFixed(2)
+          .replace(".", ",");
+
+        await bot.sendMessage(
+          ADMIN_ID,
+          `🔁 Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} €`
+        );
+      }
+    }
+
+    //PAGAMENTO RINNOVO FALLITO
+    if (event.type === "invoice.payment_failed") {
+      const invoice = event.data.object;
+
+      const subscription = invoice.subscription
+        ? await stripe.subscriptions.retrieve(invoice.subscription)
+        : null;
+
+      const customer = invoice.customer
+        ? await stripe.customers.retrieve(invoice.customer)
+        : null;
+
+      let username =
+        subscription?.metadata?.username ||
+        customer?.metadata?.username ||
+        "";
+
+      let firstName =
+        subscription?.metadata?.firstName ||
+        customer?.metadata?.firstName ||
+        "";
+
+      let lastName =
+        subscription?.metadata?.lastName ||
+        customer?.metadata?.lastName ||
+        "";
+
+      let fullName =
+        subscription?.metadata?.fullName ||
+        customer?.metadata?.fullName ||
+        `${firstName} ${lastName}`.trim();
+
+      const displayName =
+        fullName && username
+          ? `${fullName} (@${username})`
+          : fullName
+          ? fullName
+          : username
+          ? `@${username}`
+          : "Sconosciuto";
+
+      await bot.sendMessage(
+        ADMIN_ID,
+        `⚠️ Pagamento rinnovo fallito!\nUtente: ${displayName}\nVerifica su Stripe prima di rimuoverlo.`
+      );
+    }
+    
     //ABBONAMENTO TERMINATO
     if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
