@@ -5,6 +5,13 @@ const Stripe = require("stripe");
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+const PRICE_ID_5_EURO = "price_1TG1UPKSYfmjXmRwCcfunIZp";
+const PRICE_ID_10_EURO = "price_1U8HRWKSYfmjXmRwxjE916lj";
+
+// 1° settembre 2026, ore 00:00 in Italia
+const CAMBIO_PREZZO = Date.UTC(2026, 7, 31, 22, 0, 0);
+
+
 bot.on("message", async (msg) => {
   const text = msg.text?.toLowerCase();
   const chatId = msg.chat.id; 
@@ -54,7 +61,7 @@ bot.on("message", async (msg) => {
         
       line_items: [
         {
-          price: "price_1TG1UPKSYfmjXmRwCcfunIZp",
+          price: Date.now() >= CAMBIO_PREZZO ? PRICE_ID_10_EURO : PRICE_ID_5_EURO,
           quantity: 1,
         },
       ],
