@@ -15,10 +15,173 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const ADMIN_ID = 1192463575;
 
+// Evita notifiche duplicate quando Stripe riconsegna lo stesso evento
+// o invia piu volte lo stesso tentativo sulla medesima fattura.
+// La memoria e limitata nel tempo per non crescere indefinitamente.
+const EVENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const processedEventIds = new Map();
+const processingEventIds = new Set();
+const notifiedFailureAttempts = new Map();
+
+function cleanupNotificationCaches() {
+  const cutoff = Date.now() - EVENT_CACHE_TTL_MS;
+
+  for (const [key, timestamp] of processedEventIds) {
+    if (timestamp < cutoff) processedEventIds.delete(key);
+  }
+
+  for (const [key, timestamp] of notifiedFailureAttempts) {
+    if (timestamp < cutoff) notifiedFailureAttempts.delete(key);
+  }
+}
+
+function valueId(value) {
+  if (!value) return null;
+  return typeof value === "string" ? value : value.id || null;
+}
+
+function formatStripeDate(timestamp) {
+  if (!timestamp) return "non ancora programmato";
+
+  return new Intl.DateTimeFormat("it-IT", {
+    timeZone: "Europe/Rome",
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp * 1000));
+}
+
+function paymentContext(billingReason) {
+  if (billingReason === "subscription_cycle") {
+    return {
+      adminTitle: "Pagamento rinnovo mensile fallito!",
+      customerTitle: "Il rinnovo del tuo abbonamento non è andato a buon fine.",
+      label: "rinnovo mensile",
+    };
+  }
+
+  if (billingReason === "subscription_create") {
+    return {
+      adminTitle: "Primo pagamento abbonamento fallito!",
+      customerTitle: "Il primo pagamento del tuo abbonamento non è andato a buon fine.",
+      label: "primo pagamento",
+    };
+  }
+
+  if (billingReason === "subscription_update") {
+    return {
+      adminTitle: "Pagamento modifica abbonamento fallito!",
+      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non è andato a buon fine.",
+      label: "modifica abbonamento",
+    };
+  }
+
+  return {
+    adminTitle: "Pagamento fattura fallito!",
+    customerTitle: "Un pagamento relativo al tuo abbonamento non è andato a buon fine.",
+    label: billingReason || "fattura",
+  };
+}
+
+function failureGuidance(declineCode) {
+  const guidance = {
+    insufficient_funds: {
+      cause: "fondi o plafond insufficienti",
+      action: "Verificare la disponibilità sulla carta oppure usare un altro metodo di pagamento.",
+    },
+    transaction_not_allowed: {
+      cause: "transazione non autorizzata dalla banca",
+      action: "Contattare la banca oppure usare un'altra carta. Il solo tentativo automatico potrebbe non riuscire.",
+    },
+    authentication_required: {
+      cause: "autenticazione della carta richiesta",
+      action: "Aprire la pagina Stripe e completare l'autenticazione oppure aggiornare il metodo di pagamento.",
+    },
+    expired_card: {
+      cause: "carta scaduta",
+      action: "Aggiornare il metodo di pagamento con una carta valida.",
+    },
+    card_not_supported: {
+      cause: "carta non abilitata per questo tipo di pagamento",
+      action: "Contattare la banca oppure usare un'altra carta.",
+    },
+    do_not_honor: {
+      cause: "pagamento rifiutato dalla banca",
+      action: "Contattare la banca oppure usare un altro metodo di pagamento.",
+    },
+    generic_decline: {
+      cause: "pagamento rifiutato dalla banca",
+      action: "Contattare la banca oppure usare un altro metodo di pagamento.",
+    },
+  };
+
+  return guidance[declineCode] || {
+    cause: "pagamento rifiutato",
+    action: "Aprire la pagina Stripe, verificare il metodo di pagamento e, se necessario, contattare la banca.",
+  };
+}
+
+async function paymentFailureDetails(invoice) {
+  let paymentIntent =
+    invoice.payment_intent ||
+    invoice.payments?.data?.[0]?.payment?.payment_intent ||
+    null;
+
+  try {
+    const paymentIntentId = valueId(paymentIntent);
+    if (paymentIntentId) {
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ["latest_charge"],
+      });
+    }
+  } catch (error) {
+    console.log("Impossibile recuperare il PaymentIntent:", error.message);
+  }
+
+  const paymentError =
+    paymentIntent?.last_payment_error ||
+    invoice.last_payment_error ||
+    null;
+
+  const latestCharge = paymentIntent?.latest_charge || null;
+  const declineCode =
+    paymentError?.decline_code ||
+    latestCharge?.outcome?.reason ||
+    "";
+
+  const errorCode =
+    paymentError?.code ||
+    latestCharge?.failure_code ||
+    "";
+
+  const networkCode =
+    paymentError?.network_decline_code ||
+    latestCharge?.outcome?.network_decline_code ||
+    "";
+
+  return {
+    declineCode,
+    errorCode,
+    networkCode,
+    ...failureGuidance(declineCode),
+  };
+}
+
 app.post("/webhook", async (req, res) => {
   const event = req.body;
 
   console.log("EVENT RICEVUTO:", event.type);
+
+  cleanupNotificationCaches();
+
+  if (
+    event.id &&
+    (processedEventIds.has(event.id) || processingEventIds.has(event.id))
+  ) {
+    console.log(`Evento duplicato ignorato: ${event.id}`);
+    return res.sendStatus(200);
+  }
+
+  if (event.id) processingEventIds.add(event.id);
 
   try {
     //PAGAMENTO COMPLETATO
@@ -140,49 +303,145 @@ app.post("/webhook", async (req, res) => {
 
     //PAGAMENTO RINNOVO FALLITO
     if (event.type === "invoice.payment_failed") {
-      const invoice = event.data.object;
+      let invoice = event.data.object;
 
-      const subscription = invoice.subscription
-        ? await stripe.subscriptions.retrieve(invoice.subscription)
-        : null;
+      // Recupera la versione piu aggiornata della fattura e il link sicuro
+      // ospitato da Stripe per pagare o aggiornare il metodo di pagamento.
+      if (invoice.id) {
+        try {
+          invoice = await stripe.invoices.retrieve(invoice.id);
+        } catch (error) {
+          console.log("Impossibile aggiornare i dati della fattura:", error.message);
+        }
+      }
 
-      const customer = invoice.customer
-        ? await stripe.customers.retrieve(invoice.customer)
-        : null;
+      const attemptNumber = invoice.attempt_count || 1;
+      const failureAttemptKey = `${invoice.id || "invoice"}:${attemptNumber}`;
+      const persistedFailureAttempt =
+        invoice.metadata?.myriambot_failure_notification || "";
 
-      let username =
-        subscription?.metadata?.username ||
-        customer?.metadata?.username ||
-        "";
+      if (
+        notifiedFailureAttempts.has(failureAttemptKey) ||
+        persistedFailureAttempt === failureAttemptKey
+      ) {
+        console.log(`Tentativo di pagamento gia notificato: ${failureAttemptKey}`);
+      } else {
+        const context = paymentContext(invoice.billing_reason);
 
-      let firstName =
-        subscription?.metadata?.firstName ||
-        customer?.metadata?.firstName ||
-        "";
+        const subscriptionId = valueId(
+          invoice.subscription ||
+          invoice.parent?.subscription_details?.subscription
+        );
+        const customerId = valueId(invoice.customer);
 
-      let lastName =
-        subscription?.metadata?.lastName ||
-        customer?.metadata?.lastName ||
-        "";
+        const subscription = subscriptionId
+          ? await stripe.subscriptions.retrieve(subscriptionId)
+          : null;
 
-      let fullName =
-        subscription?.metadata?.fullName ||
-        customer?.metadata?.fullName ||
-        `${firstName} ${lastName}`.trim();
+        const customer = customerId
+          ? await stripe.customers.retrieve(customerId)
+          : null;
 
-      const displayName =
-        fullName && username
-          ? `${fullName} (@${username})`
-          : fullName
-          ? fullName
-          : username
-          ? `@${username}`
-          : "Sconosciuto";
+        const telegramId =
+          subscription?.metadata?.telegramId ||
+          customer?.metadata?.telegramId ||
+          null;
 
-      await bot.sendMessage(
-        ADMIN_ID,
-        `⚠️ Pagamento rinnovo fallito!\nUtente: ${displayName}\nVerifica su Stripe prima di rimuoverlo.`
-      );
+        const username =
+          subscription?.metadata?.username ||
+          customer?.metadata?.username ||
+          "";
+
+        const firstName =
+          subscription?.metadata?.firstName ||
+          customer?.metadata?.firstName ||
+          "";
+
+        const lastName =
+          subscription?.metadata?.lastName ||
+          customer?.metadata?.lastName ||
+          "";
+
+        const fullName =
+          subscription?.metadata?.fullName ||
+          customer?.metadata?.fullName ||
+          `${firstName} ${lastName}`.trim();
+
+        const displayName =
+          fullName && username
+            ? `${fullName} (@${username})`
+            : fullName
+            ? fullName
+            : username
+            ? `@${username}`
+            : "Sconosciuto";
+
+        const details = await paymentFailureDetails(invoice);
+        const nextAttempt = formatStripeDate(invoice.next_payment_attempt);
+        const codeParts = [
+          details.declineCode,
+          details.networkCode ? `circuito ${details.networkCode}` : "",
+        ].filter(Boolean);
+
+        const codeLine = codeParts.length
+          ? `\nCodice: ${codeParts.join(" - ")}`
+          : "";
+
+        await bot.sendMessage(
+          ADMIN_ID,
+          `⚠️ ${context.adminTitle}\n` +
+          `Utente: ${displayName}\n` +
+          `Operazione: ${context.label}\n` +
+          `Tentativo: ${attemptNumber}\n` +
+          `Causa: ${details.cause}${codeLine}\n` +
+          `Prossimo tentativo: ${nextAttempt}\n` +
+          `Cosa fare: ${details.action}\n` +
+          `Il cliente non è stato rimosso dal canale.`
+        );
+
+        if (telegramId) {
+          const paymentLink = invoice.hosted_invoice_url
+            ? `\n\nPuoi regolarizzare il pagamento in sicurezza qui:\n${invoice.hosted_invoice_url}`
+            : "";
+
+          try {
+            await bot.sendMessage(
+              telegramId,
+              `⚠️ ${context.customerTitle}\n\n` +
+              `Motivo: ${details.cause}.\n` +
+              `${details.action}\n` +
+              `Prossimo tentativo indicato da Stripe: ${nextAttempt}.` +
+              paymentLink
+            );
+          } catch (error) {
+            console.log(
+              `Impossibile avvisare su Telegram l'utente ${telegramId}:`,
+              error.message
+            );
+          }
+        } else {
+          console.log("Telegram ID non trovato: avviso cliente non inviato");
+        }
+
+        notifiedFailureAttempts.set(failureAttemptKey, Date.now());
+
+        // Memorizza il tentativo anche su Stripe: in questo modo una
+        // riconsegna successiva a un riavvio di Render non genera duplicati.
+        if (invoice.id) {
+          try {
+            await stripe.invoices.update(invoice.id, {
+              metadata: {
+                myriambot_failure_notification: failureAttemptKey,
+              },
+            });
+          } catch (error) {
+            console.log(
+              "Impossibile salvare su Stripe la chiave anti-duplicato:",
+              error.message
+            );
+          }
+        }
+      }
     }
     
     //ABBONAMENTO TERMINATO
@@ -250,14 +509,16 @@ app.post("/webhook", async (req, res) => {
        } 
      }   
     
+     if (event.id) processedEventIds.set(event.id, Date.now());
      res.sendStatus(200);
    } catch (err) {
      console.log(err);
      res.sendStatus(500);
-   } 
+   } finally {
+     if (event.id) processingEventIds.delete(event.id);
+   }
  });
 
     
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
-
