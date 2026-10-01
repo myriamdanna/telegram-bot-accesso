@@ -1,6 +1,6 @@
 // ============================================================
 // MYRIAMBOT - ACCESSO E PAGAMENTO STRIPE
-// PATCH 01/10/2026:
+// PATCH 21/09/2026:
 // - riavvio automatico del servizio in caso di polling Telegram bloccato
 // - watchdog periodico con controllo della connessione Telegram
 // - notifica opzionale all'amministratore dopo avvio/ripristino
