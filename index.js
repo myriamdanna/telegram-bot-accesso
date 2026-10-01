@@ -1,6 +1,6 @@
 // ============================================================
 // MYRIAMBOT - ACCESSO E PAGAMENTO STRIPE
-// PATCH 21/09/2026:
+// PATCH 01/10/2026:
 // - riavvio automatico del servizio in caso di polling Telegram bloccato
 // - watchdog periodico con controllo della connessione Telegram
 // - notifica opzionale all'amministratore dopo avvio/ripristino
@@ -136,16 +136,11 @@ async function runTelegramHealthCheck() {
 
 
 bot.on("polling_error", (error) => {
-  const details = errorDetails(error);
-  console.error("❌ Errore polling Telegram:", details);
-
-  const fatalNetworkError =
-    error?.code === "EFATAL" ||
-    /ECONNABORTED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|AggregateError/i.test(details);
-
-  if (fatalNetworkError) {
-    scheduleServiceRestart(`errore fatale di polling: ${details}`);
-  }
+  // node-telegram-bot-api gestisce il ciclo di polling. Errori di rete
+  // transitori (per esempio ECONNRESET) vengono registrati senza terminare
+  // subito il processo: il controllo periodico riavvia Render solo se il
+  // collegamento Telegram continua a non rispondere.
+  console.error("⚠️ Errore temporaneo polling Telegram:", errorDetails(error));
 });
 
 
