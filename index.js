@@ -264,7 +264,7 @@ bot.on("message", async (msg) => {
         
       line_items: [
         {
-          price: Date.now() >= CAMBIO_PREZZO ? PRICE_ID_10_EURO : PRICE_ID_5_EURO,
+          price: PRICE_ID_5_EURO,
           quantity: 1,
         },
       ],
