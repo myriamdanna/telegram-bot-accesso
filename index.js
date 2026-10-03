@@ -1,5 +1,10 @@
 // ============================================================
 // MYRIAMBOT - ACCESSO E PAGAMENTO STRIPE
+// INTERVENTO 03/10/2026:
+// - mantenuto il prezzo di 5 € per i nuovi abbonamenti al canale
+// - registrazione admin dei video singoli e creazione del relativo prezzo Stripe
+// - link personale al checkout Stripe tramite pulsante pubblicato nel canale
+// - avvio acquisto video da deep link Telegram, senza alterare il flusso abbonamento
 // PATCH 21/09/2026:
 // - riavvio automatico del servizio in caso di polling Telegram bloccato
 // - watchdog periodico con controllo della connessione Telegram
@@ -20,6 +25,7 @@ const PRICE_ID_10_EURO = "price_1U8HRWKSYfmjXmRwxjE916lj";
 // Inserire su Render una variabile ADMIN_CHAT_ID con il Chat ID di Myriam.
 // Se non è configurata, il bot continua a funzionare e scrive gli avvisi nei log.
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "";
+const BOT_USERNAME = "Myriamchannelbot";
 
 const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 const HEALTH_CHECK_TIMEOUT_MS = 15 * 1000;
@@ -210,18 +216,128 @@ setInterval(() => {
 
 
 bot.on("message", async (msg) => {
-  const text = msg.text?.trim().toLowerCase();
   const chatId = msg.chat.id;
+  const rawText = msg.text || msg.caption || "";
+  const text = rawText.trim();
+  const normalizedText = text.toLowerCase();
+
+  // Solo Myriam può registrare un video a pagamento.
+  // Invia al bot un video con didascalia: /nuovovideo Titolo | 4,99
+  if (msg.video) {
+    if (!ADMIN_CHAT_ID || String(chatId) !== String(ADMIN_CHAT_ID)) {
+      console.log(`Upload video rifiutato da chat non amministratore: ${chatId}`);
+      return;
+    }
+
+    const videoMatch = text.match(/^\/nuovovideo\s+(.+?)\s*\|\s*(\d+(?:[.,]\d{1,2})?)\s*€?$/i);
+    if (!videoMatch) {
+      return bot.sendMessage(
+        chatId,
+        "Per registrare il video, aggiungi questa didascalia:\n/nuovovideo Titolo del video | 4,99"
+      );
+    }
+
+    const title = videoMatch[1].trim();
+    const amount = Number(videoMatch[2].replace(",", "."));
+    const amountCents = Math.round(amount * 100);
+
+    if (!title || title.length > 120 || !Number.isFinite(amountCents) || amountCents < 50 || amountCents > 100000) {
+      return bot.sendMessage(chatId, "Titolo o prezzo non valido. Il prezzo deve essere tra 0,50 € e 1.000,00 €.");
+    }
+
+    try {
+      const product = await stripe.products.create({
+        name: title,
+        active: true,
+        metadata: {
+          myriambot_type: "paid_telegram_video",
+          telegram_file_id: msg.video.file_id,
+        },
+      });
+
+      const price = await stripe.prices.create({
+        product: product.id,
+        currency: "eur",
+        unit_amount: amountCents,
+      });
+
+      await stripe.products.update(product.id, { default_price: price.id });
+
+      const startPayload = `buy_${product.id}`;
+      const purchaseUrl = `https://t.me/${BOT_USERNAME}?start=${startPayload}`;
+      const formattedAmount = (amountCents / 100).toFixed(2).replace(".", ",");
+
+      return bot.sendMessage(
+        chatId,
+        `✅ Video registrato su Stripe.\nTitolo: ${title}\nPrezzo: ${formattedAmount} €\n\n` +
+        `Nel post della locandina su Myriamchannel, aggiungi un pulsante con questo link:\n${purchaseUrl}\n\n` +
+        `Il cliente aprirà Myriambot, riceverà il link di pagamento personale e, dopo la conferma Stripe, il video protetto.`
+      );
+    } catch (error) {
+      console.error("❌ Errore registrazione video:", error.message);
+      return bot.sendMessage(chatId, "❌ Non sono riuscito a registrare il video. Riprova; il bot non ha pubblicato alcun link.");
+    }
+  }
 
   if (!text) return;
 
   // Permette a Myriam di recuperare il valore da inserire in ADMIN_CHAT_ID.
-  if (text === "/chatid") {
+  if (normalizedText === "/chatid") {
     return bot.sendMessage(chatId, `Il tuo Telegram Chat ID è: ${chatId}`);
   }
 
+  // Il pulsante sul canale apre un link personale al bot: il payload identifica il video.
+  const startMatch = text.match(/^\/start(?:@\w+)?(?:\s+([A-Za-z0-9_-]+))?$/i);
+  const startPayload = startMatch?.[1] || "";
+  if (startPayload.startsWith("buy_prod_")) {
+    const productId = startPayload.slice(4);
+
+    try {
+      const product = await stripe.products.retrieve(productId);
+      if (!product.active || product.metadata?.myriambot_type !== "paid_telegram_video") {
+        return bot.sendMessage(chatId, "Questo video non è al momento disponibile per l'acquisto.");
+      }
+
+      const priceId = typeof product.default_price === "string"
+        ? product.default_price
+        : product.default_price?.id;
+      if (!priceId) throw new Error("Il prodotto video non ha un prezzo predefinito.");
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        client_reference_id: String(chatId),
+        metadata: {
+          purchase_type: "paid_telegram_video",
+          telegramId: String(chatId),
+          videoProductId: product.id,
+          username: msg.from.username || "",
+          firstName: msg.from.first_name || "",
+          lastName: msg.from.last_name || "",
+        },
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `https://t.me/${BOT_USERNAME}?start=video_paid`,
+        cancel_url: `https://t.me/${BOT_USERNAME}?start=video_cancelled`,
+      });
+
+      return bot.sendMessage(
+        chatId,
+        `🎬 Acquisto: ${product.name}\nCompleta il pagamento sicuro su Stripe:\n${session.url}`
+      );
+    } catch (error) {
+      console.error("❌ Errore creazione checkout video:", error.message);
+      return bot.sendMessage(chatId, "❌ Non riesco ad aprire il pagamento per questo video. Avvisa Myriam e riprova più tardi.");
+    }
+  }
+
+  // I link di ritorno da Stripe non devono avviare un nuovo abbonamento.
+  if (["video_paid", "video_cancelled", "success", "cancel"].includes(startPayload)) {
+    return bot.sendMessage(chatId, startPayload === "video_paid"
+      ? "✅ Grazie! Stripe sta confermando il pagamento. Riceverai qui il video appena la conferma sarà completata."
+      : "Pagamento non completato. Se vuoi, puoi tornare alla locandina e riprovare.");
+  }
+
   // Accetta "ciao" o /start.
-  if (!text.includes("ciao") && text !== "/start") return;
+  if (!normalizedText.includes("ciao") && !startMatch) return;
 
   if (utenti.has(chatId)) return;
   utenti.add(chatId);
