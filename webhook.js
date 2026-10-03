@@ -121,7 +121,7 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_cycle") {
     return {
       adminTitle: "Pagamento rinnovo mensile fallito!",
-      customerTitle: "Il rinnovo del tuo abbonamento non ÃÂ¨ andato a buon fine.",
+      customerTitle: "Il rinnovo del tuo abbonamento non Ã¨ andato a buon fine.",
       label: "rinnovo mensile",
     };
   }
@@ -129,7 +129,7 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_create") {
     return {
       adminTitle: "Primo pagamento abbonamento fallito!",
-      customerTitle: "Il primo pagamento del tuo abbonamento non ÃÂ¨ andato a buon fine.",
+      customerTitle: "Il primo pagamento del tuo abbonamento non Ã¨ andato a buon fine.",
       label: "primo pagamento",
     };
   }
@@ -137,14 +137,14 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_update") {
     return {
       adminTitle: "Pagamento modifica abbonamento fallito!",
-      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non ÃÂ¨ andato a buon fine.",
+      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non Ã¨ andato a buon fine.",
       label: "modifica abbonamento",
     };
   }
 
   return {
     adminTitle: "Pagamento fattura fallito!",
-    customerTitle: "Un pagamento relativo al tuo abbonamento non ÃÂ¨ andato a buon fine.",
+    customerTitle: "Un pagamento relativo al tuo abbonamento non Ã¨ andato a buon fine.",
     label: billingReason || "fattura",
   };
 }
@@ -153,7 +153,7 @@ function failureGuidance(declineCode) {
   const guidance = {
     insufficient_funds: {
       cause: "fondi o plafond insufficienti",
-      action: "Verificare la disponibilitÃÂ  sulla carta oppure usare un altro metodo di pagamento.",
+      action: "Verificare la disponibilitÃ  sulla carta oppure usare un altro metodo di pagamento.",
     },
     transaction_not_allowed: {
       cause: "transazione non autorizzata dalla banca",
@@ -311,7 +311,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
             await bot.sendVideo(telegramId, fileId, {
               protect_content: true,
-              caption: `Ã°ÂÂÂ¬ ${product.name}`,
+              caption: `🎬 ${product.name}`,
             });
 
             // Memorizza l'esito su Stripe per bloccare i reinvii dopo retry o riavvio.
@@ -321,7 +321,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
             await bot.sendMessage(
               ADMIN_ID,
-              `Ã¢ÂÂ Video consegnato dopo pagamento Stripe.\nTitolo: ${product.name}\nChat Telegram: ${telegramId}`
+              `✅ Video consegnato dopo pagamento Stripe.\nTitolo: ${product.name}\nChat Telegram: ${telegramId}`
             );
           }
         } finally {
@@ -363,7 +363,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `Ã¢ÂÂ Nuovo abbonamento!\nUtente: ${displayName}`
+        `✅ Nuovo abbonamento!\nUtente: ${displayName}`
       );
 
       //INVITO CANALE
@@ -384,7 +384,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       if (telegramId) {
         await bot.sendMessage(
           telegramId,
-          "Ã¢ÂÂ Pagamento ricevuto! Entra nel canale:",
+          "✅ Pagamento ricevuto! Entra nel canale:",
           {
             reply_markup: {
               inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
@@ -437,7 +437,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         await bot.sendMessage(
           ADMIN_ID,
-          `Ã°ÂÂÂ Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} Ã¢ÂÂ¬`
+          `🔁 Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} €`
         );
       }
     }
@@ -530,14 +530,14 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         await bot.sendMessage(
           ADMIN_ID,
-          `Ã¢ÂÂ Ã¯Â¸Â ${context.adminTitle}\n` +
+          `⚠️ ${context.adminTitle}\n` +
           `Utente: ${displayName}\n` +
           `Operazione: ${context.label}\n` +
           `Tentativo: ${attemptNumber}\n` +
           `Causa: ${details.cause}${codeLine}\n` +
           `Prossimo tentativo: ${nextAttempt}\n` +
           `Cosa fare: ${details.action}\n` +
-          `Il cliente non ÃÂ¨ stato rimosso dal canale.`
+          `Il cliente non Ã¨ stato rimosso dal canale.`
         );
 
         if (telegramId) {
@@ -548,7 +548,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           try {
             await bot.sendMessage(
               telegramId,
-              `Ã¢ÂÂ Ã¯Â¸Â ${context.customerTitle}\n\n` +
+              `⚠️ ${context.customerTitle}\n\n` +
               `Motivo: ${details.cause}.\n` +
               `${details.action}\n` +
               `Prossimo tentativo indicato da Stripe: ${nextAttempt}.` +
@@ -637,7 +637,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `Ã¢ÂÂ Abbonamento terminato!\nUtente: ${displayName}`
+        `❌ Abbonamento terminato!\nUtente: ${displayName}`
       );
 
       //RIMOZIONE DAL CANALE
@@ -647,7 +647,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         console.log(`Utente ${telegramId} rimosso dal canale`);
       } else {
-        console.log("Ã¢ÂÂ telegramId NON trovato");     
+        console.log("❌ telegramId NON trovato");     
        } 
      }   
     
