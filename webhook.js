@@ -153,7 +153,7 @@ function failureGuidance(declineCode) {
   const guidance = {
     insufficient_funds: {
       cause: "fondi o plafond insufficienti",
-      action: "Verificare la disponibilitÃ  sulla carta oppure usare un altro metodo di pagamento.",
+      action: "Verificare la disponibilitÃ  sulla carta oppure usare un altro metodo di pagamento.",
     },
     transaction_not_allowed: {
       cause: "transazione non autorizzata dalla banca",
@@ -368,7 +368,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
       //INVITO CANALE
       const invite = await bot.createChatInviteLink(CHANNEL_ID, {
-        expire_date: Math.floor(Date.now() / 1000) + 60,
+        expire_date: Math.floor(Date.now() / 1000) + 180,
         member_limit: 1,
         creates_join_request: false,
         name: username 
@@ -634,10 +634,28 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           ? `@${username}`
           : "Sconosciuto";
 
+      const endedAt = subscription.ended_at || subscription.canceled_at || 0;
+      const scheduledEnd = Boolean(
+        subscription.cancel_at_period_end ||
+        (subscription.cancel_at && endedAt && subscription.cancel_at <= endedAt)
+      );
+      const endedAfterBillingPeriod = Boolean(
+        subscription.current_period_end &&
+        endedAt >= subscription.current_period_end
+      );
+      const cancellationReason = subscription.cancellation_details?.reason || "";
+      const isExpired =
+        cancellationReason !== "payment_failed" &&
+        (scheduledEnd || endedAfterBillingPeriod);
+
+      // L'avviso di scadenza viene inviato solo alla fine del periodo pagato;
+      // cancellazioni immediate e chiusure per mancato pagamento restano terminate.
+      const endTitle = isExpired ? "⏰ Abbonamento scaduto!" : "❌ Abbonamento terminato!";
+
       //NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `❌ Abbonamento terminato!\nUtente: ${displayName}`
+        `${endTitle}\nUtente: ${displayName}`
       );
 
       //RIMOZIONE DAL CANALE
