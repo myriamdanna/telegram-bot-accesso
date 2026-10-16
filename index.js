@@ -2,9 +2,9 @@
 // MYRIAMBOT - ACCESSO E PAGAMENTO STRIPE
 // INTERVENTO 03/10/2026:
 // - mantenuto il prezzo di 5 € per i nuovi abbonamenti al canale
-// - registrazione admin dei video singoli e creazione del relativo prezzo Stripe
+// - registrazione admin di video, foto singole e album con relativo prezzo Stripe
 // - link personale al checkout Stripe tramite pulsante pubblicato nel canale
-// - avvio acquisto video da deep link Telegram, senza alterare il flusso abbonamento
+// - consegna privata protetta dopo conferma del pagamento, senza alterare gli abbonamenti
 // PATCH 21/09/2026:
 // - riavvio automatico del servizio in caso di polling Telegram bloccato
 // - watchdog periodico con controllo della connessione Telegram
@@ -13,6 +13,7 @@
 // ============================================================
 
 const utenti = new Set();
+const photoAlbumBuffers = new Map();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
 
@@ -228,70 +229,133 @@ setInterval(() => {
 }, HEALTH_CHECK_INTERVAL_MS);
 
 
+
+async function registerPaidTelegramProduct({ chatId, mediaLabel, command, caption, fileIds }) {
+  const match = String(caption || "").trim().match(
+    new RegExp(`^\\/${command}\\s+(.+?)\\s*\\|\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*€?$`, "i")
+  );
+  if (!match) {
+    const example = mediaLabel === "foto"
+      ? "Invia la foto o l'album con questa didascalia:\n/nuovafoto Titolo del pacchetto | 4,99"
+      : "Per registrare il video, aggiungi questa didascalia:\n/nuovovideo Titolo del video | 4,99";
+    return sendMessageSafely(chatId, example);
+  }
+
+  const title = match[1].trim();
+  const amount = Number(match[2].replace(",", "."));
+  const amountCents = Math.round(amount * 100);
+  const cleanFileIds = [...new Set(fileIds || [])];
+
+  if (!title || title.length > 120 || !Number.isFinite(amountCents) || amountCents < 50 || amountCents > 100000) {
+    return sendMessageSafely(chatId, "Titolo o prezzo non valido. Il prezzo deve essere tra 0,50 € e 1.000,00 €.");
+  }
+  if (!cleanFileIds.length || (mediaLabel === "foto" && cleanFileIds.length > 10)) {
+    return sendMessageSafely(chatId, "Numero di foto non valido: puoi registrare da 1 a 10 foto per prodotto.");
+  }
+
+  try {
+    const metadata = {
+      myriambot_type: mediaLabel === "foto" ? "paid_telegram_photo" : "paid_telegram_video",
+    };
+    if (mediaLabel === "foto") {
+      metadata.photo_count = String(cleanFileIds.length);
+      cleanFileIds.forEach((fileId, index) => {
+        metadata[`photo_file_id_${index + 1}`] = fileId;
+      });
+    } else {
+      metadata.telegram_file_id = cleanFileIds[0];
+    }
+
+    const product = await stripe.products.create({ name: title, active: true, metadata });
+    const price = await stripe.prices.create({
+      product: product.id,
+      currency: "eur",
+      unit_amount: amountCents,
+    });
+    await stripe.products.update(product.id, { default_price: price.id });
+
+    const purchaseUrl = `https://t.me/${BOT_USERNAME}?start=buy_${product.id}`;
+    const formattedAmount = (amountCents / 100).toFixed(2).replace(".", ",");
+    const itemDescription = mediaLabel === "foto"
+      ? `${cleanFileIds.length} ${cleanFileIds.length === 1 ? "foto" : "foto"}`
+      : "video";
+
+    return sendMessageSafely(
+      chatId,
+      `✅ ${mediaLabel === "foto" ? "Foto" : "Video"} ${mediaLabel === "foto" ? "registrate" : "registrato"} su Stripe.\n` +
+      `Titolo: ${title}\nContenuto: ${itemDescription}\nPrezzo: ${formattedAmount} €\n\n` +
+      `Nel post della preview su Myriamchannel, aggiungi un pulsante con questo link:\n${purchaseUrl}\n\n` +
+      `Dopo il pagamento confermato, il cliente riceverà ${mediaLabel === "foto" ? "la foto o l'album" : "il video"} nella chat privata con Myriambot, con protezione Telegram attiva.`
+    );
+  } catch (error) {
+    console.error(`❌ Errore registrazione ${mediaLabel}:`, error.message);
+    return sendMessageSafely(chatId, `❌ Non sono riuscito a registrare ${mediaLabel === "foto" ? "le foto" : "il video"}. Riprova; il bot non ha pubblicato alcun link.`);
+  }
+}
+
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const rawText = msg.text || msg.caption || "";
   const text = rawText.trim();
   const normalizedText = text.toLowerCase();
 
-  // Solo Myriam può registrare un video a pagamento.
-  // Invia al bot un video con didascalia: /nuovovideo Titolo | 4,99
-  if (msg.video) {
+  // Solo Myriam può registrare video e foto a pagamento.
+  // Foto singola: inviare la foto con didascalia /nuovafoto Titolo | 4,99.
+  // Album: inviare le foto insieme e inserire la stessa didascalia sull'album.
+  if (msg.video || msg.photo?.length) {
     if (!ADMIN_CHAT_ID || String(chatId) !== String(ADMIN_CHAT_ID)) {
-      console.log(`Upload video rifiutato da chat non amministratore: ${chatId}`);
+      console.log(`Upload media a pagamento rifiutato da chat non amministratore: ${chatId}`);
       return;
     }
 
-    const videoMatch = text.match(/^\/nuovovideo\s+(.+?)\s*\|\s*(\d+(?:[.,]\d{1,2})?)\s*€?$/i);
-    if (!videoMatch) {
-      return sendMessageSafely(
+    if (msg.video) {
+      return registerPaidTelegramProduct({
         chatId,
-        "Per registrare il video, aggiungi questa didascalia:\n/nuovovideo Titolo del video | 4,99"
-      );
+        mediaLabel: "video",
+        command: "nuovovideo",
+        caption: text,
+        fileIds: [msg.video.file_id],
+      });
     }
 
-    const title = videoMatch[1].trim();
-    const amount = Number(videoMatch[2].replace(",", "."));
-    const amountCents = Math.round(amount * 100);
-
-    if (!title || title.length > 120 || !Number.isFinite(amountCents) || amountCents < 50 || amountCents > 100000) {
-      return sendMessageSafely(chatId, "Titolo o prezzo non valido. Il prezzo deve essere tra 0,50 € e 1.000,00 €.");
-    }
-
-    try {
-      const product = await stripe.products.create({
-        name: title,
-        active: true,
-        metadata: {
-          myriambot_type: "paid_telegram_video",
-          telegram_file_id: msg.video.file_id,
-        },
-      });
-
-      const price = await stripe.prices.create({
-        product: product.id,
-        currency: "eur",
-        unit_amount: amountCents,
-      });
-
-      await stripe.products.update(product.id, { default_price: price.id });
-
-      const startPayload = `buy_${product.id}`;
-      const purchaseUrl = `https://t.me/${BOT_USERNAME}?start=${startPayload}`;
-      const formattedAmount = (amountCents / 100).toFixed(2).replace(".", ",");
-
-      return sendMessageSafely(
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    if (!msg.media_group_id) {
+      return registerPaidTelegramProduct({
         chatId,
-        `✅ Video registrato su Stripe.\nTitolo: ${title}\nPrezzo: ${formattedAmount} €\n\n` +
-        `Nel post della locandina su Myriamchannel, aggiungi un pulsante con questo link:\n${purchaseUrl}\n\n` +
-        `Il cliente aprirà Myriambot, riceverà il link di pagamento personale e, dopo la conferma Stripe, il video protetto.`
-      );
-    } catch (error) {
-      console.error("❌ Errore registrazione video:", error.message);
-      return sendMessageSafely(chatId, "❌ Non sono riuscito a registrare il video. Riprova; il bot non ha pubblicato alcun link.");
+        mediaLabel: "foto",
+        command: "nuovafoto",
+        caption: text,
+        fileIds: [fileId],
+      });
     }
+
+    // Telegram invia ogni elemento dell'album come messaggio separato.
+    // Li raccogliamo per media_group_id e registriamo il prodotto quando
+    // smettono di arrivare aggiornamenti per questo album.
+    const albumKey = `${chatId}:${msg.media_group_id}`;
+    let album = photoAlbumBuffers.get(albumKey);
+    if (!album) {
+      album = { chatId, caption: "", fileIds: [], timer: null };
+      photoAlbumBuffers.set(albumKey, album);
+    }
+
+    if (!album.fileIds.includes(fileId)) album.fileIds.push(fileId);
+    if (text.startsWith("/nuovafoto") && !album.caption) album.caption = text;
+    if (album.timer) clearTimeout(album.timer);
+
+    album.timer = setTimeout(() => {
+      photoAlbumBuffers.delete(albumKey);
+      void registerPaidTelegramProduct({
+        chatId: album.chatId,
+        mediaLabel: "foto",
+        command: "nuovafoto",
+        caption: album.caption,
+        fileIds: album.fileIds,
+      });
+    }, 1800);
+
+    return;
   }
-
   if (!text) return;
 
   // Permette a Myriam di recuperare il valore da inserire in ADMIN_CHAT_ID.
@@ -299,7 +363,7 @@ bot.on("message", async (msg) => {
     return sendMessageSafely(chatId, `Il tuo Telegram Chat ID è: ${chatId}`);
   }
 
-  // Il pulsante sul canale apre un link personale al bot: il payload identifica il video.
+  // Il pulsante sul canale apre un link personale al bot: il payload identifica il prodotto.
   const startMatch = text.match(/^\/start(?:@\w+)?(?:\s+([A-Za-z0-9_-]+))?$/i);
   const startPayload = startMatch?.[1] || "";
   if (startPayload.startsWith("buy_prod_")) {
@@ -307,46 +371,50 @@ bot.on("message", async (msg) => {
 
     try {
       const product = await stripe.products.retrieve(productId);
-      if (!product.active || product.metadata?.myriambot_type !== "paid_telegram_video") {
-        return sendMessageSafely(chatId, "Questo video non è al momento disponibile per l'acquisto.");
+      const mediaType = product.metadata?.myriambot_type;
+      if (!product.active || !["paid_telegram_video", "paid_telegram_photo"].includes(mediaType)) {
+        return sendMessageSafely(chatId, "Questo contenuto non è al momento disponibile per l'acquisto.");
       }
+      const mediaLabel = mediaType === "paid_telegram_photo" ? "foto" : "video";
 
       const priceId = typeof product.default_price === "string"
         ? product.default_price
         : product.default_price?.id;
-      if (!priceId) throw new Error("Il prodotto video non ha un prezzo predefinito.");
+      if (!priceId) throw new Error(`Il prodotto ${mediaLabel} non ha un prezzo predefinito.`);
 
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
         client_reference_id: String(chatId),
         metadata: {
-          purchase_type: "paid_telegram_video",
+          purchase_type: mediaType,
           telegramId: String(chatId),
-          videoProductId: product.id,
+          [`${mediaLabel}ProductId`]: product.id,
           username: msg.from.username || "",
           firstName: msg.from.first_name || "",
           lastName: msg.from.last_name || "",
         },
         line_items: [{ price: priceId, quantity: 1 }],
-        success_url: `https://t.me/${BOT_USERNAME}?start=video_paid`,
-        cancel_url: `https://t.me/${BOT_USERNAME}?start=video_cancelled`,
+        success_url: `https://t.me/${BOT_USERNAME}?start=${mediaLabel}_paid`,
+        cancel_url: `https://t.me/${BOT_USERNAME}?start=${mediaLabel}_cancelled`,
       });
 
       return sendMessageSafely(
         chatId,
-        `🎬 Acquisto: ${product.name}\nCompleta il pagamento sicuro su Stripe:\n${session.url}`
+        `${mediaLabel === "foto" ? "📸" : "🎬"} Acquisto: ${product.name}\nCompleta il pagamento sicuro su Stripe:\n${session.url}`
       );
     } catch (error) {
-      console.error("❌ Errore creazione checkout video:", error.message);
-      return sendMessageSafely(chatId, "❌ Non riesco ad aprire il pagamento per questo video. Avvisa Myriam e riprova più tardi.");
+      console.error(`❌ Errore creazione checkout ${mediaLabel}:`, error.message);
+      return sendMessageSafely(chatId, `❌ Non riesco ad aprire il pagamento per questo contenuto. Avvisa Myriam e riprova più tardi.`);
     }
   }
 
   // I link di ritorno da Stripe non devono avviare un nuovo abbonamento.
-  if (["video_paid", "video_cancelled", "success", "cancel"].includes(startPayload)) {
+  if (["video_paid", "video_cancelled", "photo_paid", "photo_cancelled", "success", "cancel"].includes(startPayload)) {
     let message;
     if (startPayload === "video_paid") {
       message = "✅ Grazie! Stripe sta confermando il pagamento. Riceverai qui il video appena la conferma sarà completata.";
+    } else if (startPayload === "photo_paid") {
+      message = "✅ Grazie! Stripe sta confermando il pagamento. Riceverai qui la foto appena la conferma sarà completata.";
     } else if (startPayload === "success") {
       message = "✅ Pagamento completato! Stripe sta confermando l'abbonamento. Se hai già ricevuto il link d'accesso, puoi entrare nel canale.";
     } else {
