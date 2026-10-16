@@ -2,9 +2,9 @@
 // MYRIAMBOT - WEBHOOK STRIPE
 // INTERVENTO 03/10/2026:
 // - verifica la firma degli eventi ricevuti da Stripe
-// - distingue i pagamenti una tantum dei video dagli abbonamenti
-// - dopo il pagamento verificato invia il video in chat privata
-//   con protezione Telegram contro salvataggio e inoltro dall'app
+// - distingue i pagamenti una tantum di video e foto dagli abbonamenti
+// - dopo il pagamento verificato consegna video o pacchetti da 1 a 10 foto
+//   in chat privata protetta
 // - lascia invariati rinnovi, avvisi e accesso al canale in abbonamento
 // ============================================================
 
@@ -26,15 +26,15 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 const ADMIN_ID = 1192463575;
 
 // Evita notifiche duplicate quando Stripe riconsegna lo stesso evento
-// o invia piu volte lo stesso tentativo sulla medesima fattura.
+// o invia più volte lo stesso tentativo sulla medesima fattura.
 // La memoria e limitata nel tempo per non crescere indefinitamente.
 const EVENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const processedEventIds = new Map();
 const processingEventIds = new Set();
-const processingVideoSessionIds = new Set();
+const processingPaidMediaSessionIds = new Set();
 const notifiedFailureAttempts = new Map();
 
-// Questo checkout ha gia ricevuto il video mentre Stripe ha registrato
+// Questo checkout ha già ricevuto il video mentre Stripe ha registrato
 // un errore successivo nel webhook. Il retry dello stesso evento va solo
 // confermato, senza inviare di nuovo il video.
 const VIDEO_ALREADY_DELIVERED_EVENT_IDS = new Set([
@@ -121,7 +121,7 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_cycle") {
     return {
       adminTitle: "Pagamento rinnovo mensile fallito!",
-      customerTitle: "Il rinnovo del tuo abbonamento non Ã¨ andato a buon fine.",
+      customerTitle: "Il rinnovo del tuo abbonamento non è andato a buon fine.",
       label: "rinnovo mensile",
     };
   }
@@ -129,7 +129,7 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_create") {
     return {
       adminTitle: "Primo pagamento abbonamento fallito!",
-      customerTitle: "Il primo pagamento del tuo abbonamento non Ã¨ andato a buon fine.",
+      customerTitle: "Il primo pagamento del tuo abbonamento non è andato a buon fine.",
       label: "primo pagamento",
     };
   }
@@ -137,14 +137,14 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_update") {
     return {
       adminTitle: "Pagamento modifica abbonamento fallito!",
-      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non Ã¨ andato a buon fine.",
+      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non è andato a buon fine.",
       label: "modifica abbonamento",
     };
   }
 
   return {
     adminTitle: "Pagamento fattura fallito!",
-    customerTitle: "Un pagamento relativo al tuo abbonamento non Ã¨ andato a buon fine.",
+    customerTitle: "Un pagamento relativo al tuo abbonamento non è andato a buon fine.",
     label: billingReason || "fattura",
   };
 }
@@ -153,7 +153,7 @@ function failureGuidance(declineCode) {
   const guidance = {
     insufficient_funds: {
       cause: "fondi o plafond insufficienti",
-      action: "Verificare la disponibilitÃ  sulla carta oppure usare un altro metodo di pagamento.",
+      action: "Verificare la disponibilità sulla carta oppure usare un altro metodo di pagamento.",
     },
     transaction_not_allowed: {
       cause: "transazione non autorizzata dalla banca",
@@ -256,7 +256,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   cleanupNotificationCaches();
 
   if (event.id && VIDEO_ALREADY_DELIVERED_EVENT_IDS.has(event.id)) {
-    console.log(`Video gia consegnato: retry Stripe confermato senza reinvio (${event.id})`);
+    console.log(`Video già consegnato: retry Stripe confermato senza reinvio (${event.id})`);
     processedEventIds.set(event.id, Date.now());
     return res.sendStatus(200);
   }
@@ -276,56 +276,92 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (["checkout.session.completed", "checkout.session.async_payment_succeeded"].includes(event.type)) {
       let session = event.data.object;
 
-      // Video acquistato: verifica lo stato effettivo interrogando Stripe,
-      // poi invia in chat privata con protezione Telegram attiva.
-      if (session.mode === "payment" && session.metadata?.purchase_type === "paid_telegram_video") {
-        const videoSessionId = session.id;
+      // Video o foto acquistati: verifica il pagamento su Stripe e consegna
+      // il file corretto in chat privata con protezione Telegram attiva.
+      const purchaseType = session.metadata?.purchase_type;
+      if (
+        session.mode === "payment" &&
+        ["paid_telegram_video", "paid_telegram_photo"].includes(purchaseType)
+      ) {
+        const mediaSessionId = session.id;
+        const mediaLabel = purchaseType === "paid_telegram_photo" ? "foto" : "video";
+        const deliveryStatusKey = `${mediaLabel}_delivery_status`;
+        const productIdKey = `${mediaLabel}ProductId`;
 
-        if (processingVideoSessionIds.has(videoSessionId)) {
-          console.log(`Consegna gia in corso per ${videoSessionId}; evento confermato`);
+        if (processingPaidMediaSessionIds.has(mediaSessionId)) {
+          console.log(`Consegna ${mediaLabel} già in corso per ${mediaSessionId}; evento confermato`);
           return res.sendStatus(200);
         }
 
-        processingVideoSessionIds.add(videoSessionId);
+        processingPaidMediaSessionIds.add(mediaSessionId);
         try {
-          session = await stripe.checkout.sessions.retrieve(videoSessionId);
+          session = await stripe.checkout.sessions.retrieve(mediaSessionId);
 
-          if (session.metadata?.video_delivery_status === "delivered") {
-            console.log(`Video gia consegnato per la sessione ${session.id}`);
+          if (session.metadata?.[deliveryStatusKey] === "delivered") {
+            console.log(`${mediaLabel} già consegnata per la sessione ${session.id}`);
           } else if (session.status !== "complete" || session.payment_status !== "paid") {
-            console.log(`Pagamento video non ancora saldato: ${session.id}`);
+            console.log(`Pagamento ${mediaLabel} non ancora saldato: ${session.id}`);
           } else {
             const telegramId = session.client_reference_id || session.metadata?.telegramId;
-            const productId = session.metadata?.videoProductId;
+            const productId = session.metadata?.[productIdKey];
 
             if (!telegramId || !productId) {
-              throw new Error(`Dati Telegram/prodotto mancanti nella sessione video ${session.id}`);
+              throw new Error(`Dati Telegram/prodotto mancanti nella sessione ${mediaLabel} ${session.id}`);
             }
 
             const product = await stripe.products.retrieve(productId);
-            const fileId = product.metadata?.telegram_file_id;
 
-            if (product.metadata?.myriambot_type !== "paid_telegram_video" || !fileId) {
-              throw new Error(`Video non valido o file Telegram mancante per ${productId}`);
+            if (product.metadata?.myriambot_type !== purchaseType) {
+              throw new Error(`${mediaLabel} non valida per ${productId}`);
             }
 
-            await bot.sendVideo(telegramId, fileId, {
-              protect_content: true,
-              caption: `🎬 ${product.name}`,
-            });
+            if (purchaseType === "paid_telegram_photo") {
+              const photoCount = Number.parseInt(product.metadata?.photo_count || "0", 10);
+              if (!Number.isInteger(photoCount) || photoCount < 1 || photoCount > 10) {
+                throw new Error(`Numero di foto non valido per ${productId}`);
+              }
+
+              const photoFileIds = Array.from({ length: photoCount }, (_, index) =>
+                product.metadata?.[`photo_file_id_${index + 1}`]
+              );
+              if (photoFileIds.some((fileId) => !fileId)) {
+                throw new Error(`File Telegram mancanti per il pacchetto foto ${productId}`);
+              }
+
+              if (photoFileIds.length === 1) {
+                await bot.sendPhoto(telegramId, photoFileIds[0], {
+                  protect_content: true,
+                  caption: `📸 ${product.name}`,
+                });
+              } else {
+                const media = photoFileIds.map((fileId, index) => ({
+                  type: "photo",
+                  media: fileId,
+                  ...(index === 0 ? { caption: `📸 ${product.name}` } : {}),
+                }));
+                await bot.sendMediaGroup(telegramId, media, { protect_content: true });
+              }
+            } else {
+              const fileId = product.metadata?.telegram_file_id;
+              if (!fileId) throw new Error(`File Telegram video mancante per ${productId}`);
+              await bot.sendVideo(telegramId, fileId, {
+                protect_content: true,
+                caption: `🎬 ${product.name}`,
+              });
+            }
 
             // Memorizza l'esito su Stripe per bloccare i reinvii dopo retry o riavvio.
             await updateCheckoutSessionMetadata(session.id, {
-              video_delivery_status: "delivered",
+              [deliveryStatusKey]: "delivered",
             });
 
             await bot.sendMessage(
               ADMIN_ID,
-              `✅ Video consegnato dopo pagamento Stripe.\nTitolo: ${product.name}\nChat Telegram: ${telegramId}`
+              `✅ ${mediaLabel[0].toUpperCase()}${mediaLabel.slice(1)} consegnata dopo pagamento Stripe.\nTitolo: ${product.name}\nChat Telegram: ${telegramId}`
             );
           }
         } finally {
-          processingVideoSessionIds.delete(videoSessionId);
+          processingPaidMediaSessionIds.delete(mediaSessionId);
         }
       } else if (event.type === "checkout.session.completed") {
 
@@ -446,7 +482,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (event.type === "invoice.payment_failed") {
       let invoice = event.data.object;
 
-      // Recupera la versione piu aggiornata della fattura e il link sicuro
+      // Recupera la versione più aggiornata della fattura e il link sicuro
       // ospitato da Stripe per pagare o aggiornare il metodo di pagamento.
       if (invoice.id) {
         try {
@@ -465,7 +501,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         notifiedFailureAttempts.has(failureAttemptKey) ||
         persistedFailureAttempt === failureAttemptKey
       ) {
-        console.log(`Tentativo di pagamento gia notificato: ${failureAttemptKey}`);
+        console.log(`Tentativo di pagamento già notificato: ${failureAttemptKey}`);
       } else {
         const context = paymentContext(invoice.billing_reason);
 
@@ -537,7 +573,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           `Causa: ${details.cause}${codeLine}\n` +
           `Prossimo tentativo: ${nextAttempt}\n` +
           `Cosa fare: ${details.action}\n` +
-          `Il cliente non Ã¨ stato rimosso dal canale.`
+          `Il cliente non è stato rimosso dal canale.`
         );
 
         if (telegramId) {
