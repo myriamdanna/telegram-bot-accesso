@@ -17,7 +17,9 @@ const photoAlbumBuffers = new Map();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.BOT_TOKEN, {
+  polling: { params: { allowed_updates: ["message", "callback_query", "chat_member"] } },
+});
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PRICE_ID_5_EURO = "price_1TG1UPKSYfmjXmRwCcfunIZp";
@@ -37,6 +39,7 @@ const RESTART_DELAY_MS = 5000;
 let consecutiveHealthFailures = 0;
 let restartScheduled = false;
 let shutdownInProgress = false;
+const accessRecoveryRequests = new Map();
 
 // 1° settembre 2026, ore 00:00 in Italia
 const CAMBIO_PREZZO = Date.UTC(2026, 7, 31, 22, 0, 0);
@@ -294,6 +297,83 @@ async function registerPaidTelegramProduct({ chatId, mediaLabel, command, captio
   }
 }
 
+async function recoverChannelAccess(userId, chatId) {
+  const telegramId = String(userId);
+  const now = Date.now();
+  for (const [key, timestamp] of accessRecoveryRequests) {
+    if (now - timestamp > 5 * 60 * 1000) accessRecoveryRequests.delete(key);
+  }
+  const lastRequestAt = accessRecoveryRequests.get(telegramId) || 0;
+  if (now - lastRequestAt < 30000) {
+    return sendMessageSafely(chatId, "Hai appena richiesto un link. Attendi 30 secondi prima di riprovare.");
+  }
+  accessRecoveryRequests.set(telegramId, Date.now());
+
+  try {
+    const result = await stripe.subscriptions.search({
+      query: `status:'active' AND metadata['telegramId']:'${telegramId}'`,
+      limit: 100,
+    });
+    const activeSubscription = result.data.find((subscription) =>
+      subscription.status === "active" && String(subscription.metadata?.telegramId || "") === telegramId
+    );
+
+    if (!activeSubscription) {
+      console.log(`Recupero accesso negato: nessun abbonamento attivo per Telegram ${telegramId}`);
+      return sendMessageSafely(chatId, "Non trovo un abbonamento attivo collegato a questo account Telegram. Se hai pagato, contatta Myriam indicando l’email usata su Stripe.");
+    }
+
+    let member;
+    try {
+      member = await bot.getChatMember(CHANNEL_ID, userId);
+    } catch (error) {
+      console.warn(`Verifica appartenenza canale non riuscita per Telegram ${telegramId}:`, errorDetails(error));
+    }
+    if (["member", "administrator", "creator"].includes(member?.status)) {
+      console.log(`Recupero accesso: Telegram ${telegramId} è già nel canale`);
+      return sendMessageSafely(chatId, "Il tuo account risulta già iscritto al canale. Apri Telegram e controlla la chat Myriamchannel.");
+    }
+    if (member?.status === "kicked") {
+      console.log(`Recupero accesso bloccato: Telegram ${telegramId} risulta rimosso dal canale`);
+      return sendMessageSafely(chatId, "Non posso creare un link per questo account. Contatta Myriam per verificare l’accesso al canale.");
+    }
+
+    const invite = await bot.createChatInviteLink(CHANNEL_ID, {
+      expire_date: Math.floor(Date.now() / 1000) + 180,
+      member_limit: 1,
+      creates_join_request: false,
+      name: `recovery_${telegramId}`,
+    });
+    console.log(`Link di recupero creato per Telegram ${telegramId}; subscription ${activeSubscription.id}; scadenza 180s`);
+
+    await sendMessageSafely(chatId, "✅ Abbonamento attivo verificato. Usa subito questo pulsante per entrare nel canale:", {
+      reply_markup: { inline_keyboard: [[{ text: "Entra in Myriamchannel", url: invite.invite_link }]] },
+    });
+    console.log(`Link di recupero inviato a Telegram ${telegramId}`);
+  } catch (error) {
+    console.error(`Errore recupero accesso per Telegram ${telegramId}:`, errorDetails(error));
+    return sendMessageSafely(chatId, "Non riesco a verificare o ripristinare l’accesso in questo momento. Riprova tra poco o contatta Myriam.");
+  }
+}
+
+bot.on("callback_query", async (query) => {
+  if (query.data !== "recover_channel_access") return;
+  const chatId = query.message?.chat?.id;
+  const userId = query.from?.id;
+  await bot.answerCallbackQuery(query.id);
+  if (!chatId || !userId) return;
+  await recoverChannelAccess(userId, chatId);
+});
+
+bot.on("chat_member", (update) => {
+  if (String(update.chat?.id) !== String(CHANNEL_ID)) return;
+  const user = update.new_chat_member?.user;
+  const oldStatus = update.old_chat_member?.status;
+  const newStatus = update.new_chat_member?.status;
+  if (!user || oldStatus === newStatus) return;
+  console.log(`AGGIORNAMENTO ACCESSO CANALE: Telegram ${user.id}; ${oldStatus} -> ${newStatus}; invite ${update.invite_link?.name || "non disponibile"}`);
+});
+
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const rawText = msg.text || msg.caption || "";
@@ -409,6 +489,10 @@ bot.on("message", async (msg) => {
     }
   }
 
+  if (/^\/accesso(?:@\w+)?$/i.test(text) || normalizedText === "non riesco a entrare") {
+    return recoverChannelAccess(msg.from?.id || chatId, chatId);
+  }
+
   // I link di ritorno da Stripe non devono avviare un nuovo abbonamento.
   if (["video_paid", "video_cancelled", "photo_paid", "photo_cancelled", "success", "cancel"].includes(startPayload)) {
     let message;
@@ -421,7 +505,13 @@ bot.on("message", async (msg) => {
     } else {
       message = "Pagamento non completato. Se vuoi, puoi tornare alla locandina e riprovare.";
     }
-    return sendMessageSafely(chatId, message);
+    return sendMessageSafely(
+      chatId,
+      message,
+      startPayload === "success"
+        ? { reply_markup: { inline_keyboard: [[{ text: "🔄 Non riesco a entrare", callback_data: "recover_channel_access" }]] } }
+        : undefined
+    );
   }
 
   // Saluto o /start: un solo tocco apre il modulo Stripe incorporato in Telegram.
@@ -432,7 +522,10 @@ bot.on("message", async (msg) => {
     "👋 Ciao! Per iscriverti a Myriamchannel, premi il pulsante qui sotto: si aprirà subito il modulo di pagamento Stripe.",
     {
       reply_markup: {
-        inline_keyboard: [[{ text: "💳 Voglio abbonarmi", web_app: { url: CHECKOUT_MINI_APP_URL } }]],
+        inline_keyboard: [
+          [{ text: "💳 Voglio abbonarmi", web_app: { url: CHECKOUT_MINI_APP_URL } }],
+          [{ text: "🔄 Non riesco a entrare", callback_data: "recover_channel_access" }],
+        ],
       },
     }
   );
