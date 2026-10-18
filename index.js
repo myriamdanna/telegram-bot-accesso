@@ -13,6 +13,7 @@
 // ============================================================
 
 const utenti = new Set();
+const subscriptionCheckoutInProgress = new Set();
 const photoAlbumBuffers = new Map();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
@@ -293,6 +294,72 @@ async function registerPaidTelegramProduct({ chatId, mediaLabel, command, captio
   }
 }
 
+// Crea il checkout dell'abbonamento solo dopo che l'utente preme il pulsante.
+bot.on("callback_query", async (query) => {
+  if (query.data !== "start_subscription_checkout") return;
+
+  try {
+    await bot.answerCallbackQuery(query.id);
+  } catch (error) {
+    console.error("❌ Errore risposta al pulsante abbonamento:", errorDetails(error));
+  }
+
+  const chatId = query.message?.chat?.id;
+  const telegramUser = query.from;
+  if (!chatId || !telegramUser) return;
+
+  if (subscriptionCheckoutInProgress.has(chatId)) {
+    return sendMessageSafely(chatId, "⏳ Sto già preparando il checkout. Attendi qualche secondo.");
+  }
+  subscriptionCheckoutInProgress.add(chatId);
+
+  try {
+    const firstName = telegramUser.first_name || "";
+    const lastName = telegramUser.last_name || "";
+    const username = telegramUser.username || "";
+    const fullName = [firstName, lastName].filter(Boolean).join(" ");
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      client_reference_id: String(chatId),
+      metadata: {
+        telegramId: String(chatId),
+        username,
+        firstName,
+        lastName,
+        fullName,
+      },
+      subscription_data: {
+        metadata: {
+          telegramId: String(chatId),
+          username,
+          firstName,
+          lastName,
+          fullName,
+        },
+      },
+      line_items: [{ price: PRICE_ID_5_EURO, quantity: 1 }],
+      success_url: "https://t.me/Myriamchannelbot?start=success",
+      cancel_url: "https://t.me/Myriamchannelbot?start=cancel",
+    });
+
+    return sendMessageSafely(
+      chatId,
+      "💳 Per completare l'iscrizione, apri il checkout Stripe. Prima di confermare potrai verificare importo e periodicità.",
+      {
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔒 Continua il pagamento su Stripe", url: session.url }]],
+        },
+      }
+    );
+  } catch (error) {
+    console.error("❌ Errore creazione checkout abbonamento:", errorDetails(error));
+    return sendMessageSafely(chatId, "❌ Non riesco a preparare il pagamento in questo momento. Riprova tra poco o avvisa Myriam.");
+  } finally {
+    subscriptionCheckoutInProgress.delete(chatId);
+  }
+});
+
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const rawText = msg.text || msg.caption || "";
@@ -423,70 +490,19 @@ bot.on("message", async (msg) => {
     return sendMessageSafely(chatId, message);
   }
 
-  // Accetta "ciao" o /start.
+  // Saluto o /start: prima spiega il passaggio e chiede una scelta esplicita.
+  // La sessione Stripe verrà creata solo dopo il tocco sul pulsante.
   if (!normalizedText.includes("ciao") && !startMatch) return;
 
-  if (utenti.has(chatId)) return;
-  utenti.add(chatId);
-
-  setTimeout(() => {
-    utenti.delete(chatId);
-  }, 5000);
-
-  try {
-    const firstName = msg.from.first_name || '';
-    const lastName = msg.from.last_name || '';
-    const username = msg.from.username || '';
-
-    const fullName = [firstName, lastName]
-      .filter(Boolean)
-      .join(" ");
-    
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-  
-      client_reference_id: chatId.toString(),
- 
-      metadata: {
-          telegramId: chatId.toString(),
-          username: username,
-          firstName: firstName,
-          lastName: lastName,
-          fullName: fullName
+  return sendMessageSafely(
+    chatId,
+    "👋 Ciao! Per iscriverti a Myriamchannel, premi il pulsante qui sotto.\n\n" +
+    "Si aprirà il checkout Stripe, dove potrai controllare importo e periodicità prima di confermare. " +
+    "Dopo il pagamento, Myriambot ti invierà il link personale per entrare nel canale.",
+    {
+      reply_markup: {
+        inline_keyboard: [[{ text: "💳 Voglio abbonarmi", callback_data: "start_subscription_checkout" }]],
       },
-
-      subscription_data: {
-        metadata: {
-          telegramId: chatId.toString(),
-          username: username,
-          firstName: firstName,
-          lastName: lastName,
-          fullName: fullName
-        }
-      },
-        
-      line_items: [
-        {
-          price: PRICE_ID_5_EURO,
-          quantity: 1,
-        },
-      ],
-      
-      success_url: "https://t.me/Myriamchannelbot?start=success",
-      cancel_url: "https://t.me/Myriamchannelbot?start=cancel",
-    });
-
-    return sendMessageSafely(
-      chatId,
-      "🔥 Accedi qui 👇\n" + session.url
-    );
-
-  } catch (error) {
-    console.log("❌ ERRORE STRIPE COMPLETO:");
-    console.log(error);
-    console.log(error.message);
-    console.log(error.raw);
-    
-    return sendMessageSafely(chatId, "❌ Errore pagamento, riprova");
-  }
+    }
+  );
 });
