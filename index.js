@@ -339,7 +339,7 @@ async function recoverChannelAccess(userId, chatId) {
     }
 
     const invite = await bot.createChatInviteLink(CHANNEL_ID, {
-      expire_date: Math.floor(Date.now() / 1000) + 600,
+      expire_date: Math.floor(Date.now() / 1000) + 180,
       member_limit: 1,
       creates_join_request: false,
       name: `recovery_${telegramId}`,
