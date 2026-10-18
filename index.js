@@ -13,7 +13,6 @@
 // ============================================================
 
 const utenti = new Set();
-const subscriptionCheckoutInProgress = new Set();
 const photoAlbumBuffers = new Map();
 const TelegramBot = require("node-telegram-bot-api");
 const Stripe = require("stripe");
@@ -28,6 +27,7 @@ const PRICE_ID_10_EURO = "price_1U8HRWKSYfmjXmRwxjE916lj";
 // Se non è configurata, il bot continua a funzionare e scrive gli avvisi nei log.
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "";
 const BOT_USERNAME = "Myriamchannelbot";
+const CHECKOUT_MINI_APP_URL = process.env.CHECKOUT_MINI_APP_URL || "https://stripe-webhook-udt3.onrender.com/miniapp";
 
 const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 const HEALTH_CHECK_TIMEOUT_MS = 15 * 1000;
@@ -294,72 +294,6 @@ async function registerPaidTelegramProduct({ chatId, mediaLabel, command, captio
   }
 }
 
-// Crea il checkout dell'abbonamento solo dopo che l'utente preme il pulsante.
-bot.on("callback_query", async (query) => {
-  if (query.data !== "start_subscription_checkout") return;
-
-  try {
-    await bot.answerCallbackQuery(query.id);
-  } catch (error) {
-    console.error("❌ Errore risposta al pulsante abbonamento:", errorDetails(error));
-  }
-
-  const chatId = query.message?.chat?.id;
-  const telegramUser = query.from;
-  if (!chatId || !telegramUser) return;
-
-  if (subscriptionCheckoutInProgress.has(chatId)) {
-    return sendMessageSafely(chatId, "⏳ Sto già preparando il checkout. Attendi qualche secondo.");
-  }
-  subscriptionCheckoutInProgress.add(chatId);
-
-  try {
-    const firstName = telegramUser.first_name || "";
-    const lastName = telegramUser.last_name || "";
-    const username = telegramUser.username || "";
-    const fullName = [firstName, lastName].filter(Boolean).join(" ");
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      client_reference_id: String(chatId),
-      metadata: {
-        telegramId: String(chatId),
-        username,
-        firstName,
-        lastName,
-        fullName,
-      },
-      subscription_data: {
-        metadata: {
-          telegramId: String(chatId),
-          username,
-          firstName,
-          lastName,
-          fullName,
-        },
-      },
-      line_items: [{ price: PRICE_ID_5_EURO, quantity: 1 }],
-      success_url: "https://t.me/Myriamchannelbot?start=success",
-      cancel_url: "https://t.me/Myriamchannelbot?start=cancel",
-    });
-
-    return sendMessageSafely(
-      chatId,
-      "💳 Per completare l'iscrizione, apri il checkout Stripe. Prima di confermare potrai verificare importo e periodicità.",
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: "🔒 Continua il pagamento su Stripe", url: session.url }]],
-        },
-      }
-    );
-  } catch (error) {
-    console.error("❌ Errore creazione checkout abbonamento:", errorDetails(error));
-    return sendMessageSafely(chatId, "❌ Non riesco a preparare il pagamento in questo momento. Riprova tra poco o avvisa Myriam.");
-  } finally {
-    subscriptionCheckoutInProgress.delete(chatId);
-  }
-});
-
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const rawText = msg.text || msg.caption || "";
@@ -490,18 +424,15 @@ bot.on("message", async (msg) => {
     return sendMessageSafely(chatId, message);
   }
 
-  // Saluto o /start: prima spiega il passaggio e chiede una scelta esplicita.
-  // La sessione Stripe verrà creata solo dopo il tocco sul pulsante.
+  // Saluto o /start: un solo tocco apre il modulo Stripe incorporato in Telegram.
   if (!normalizedText.includes("ciao") && !startMatch) return;
 
   return sendMessageSafely(
     chatId,
-    "👋 Ciao! Per iscriverti a Myriamchannel, premi il pulsante qui sotto.\n\n" +
-    "Si aprirà il checkout Stripe, dove potrai controllare importo e periodicità prima di confermare. " +
-    "Dopo il pagamento, Myriambot ti invierà il link personale per entrare nel canale.",
+    "👋 Ciao! Per iscriverti a Myriamchannel, premi il pulsante qui sotto: si aprirà subito il modulo di pagamento Stripe.",
     {
       reply_markup: {
-        inline_keyboard: [[{ text: "💳 Voglio abbonarmi", callback_data: "start_subscription_checkout" }]],
+        inline_keyboard: [[{ text: "💳 Voglio abbonarmi", web_app: { url: CHECKOUT_MINI_APP_URL } }]],
       },
     }
   );
