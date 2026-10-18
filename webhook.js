@@ -11,12 +11,17 @@
 const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
 const https = require("https");
+const crypto = require("crypto");
 
 const Stripe = require("stripe");
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+const CHECKOUT_MINI_APP_URL = (process.env.CHECKOUT_MINI_APP_URL || "https://stripe-webhook-udt3.onrender.com/miniapp").replace(/\/+$/, "");
+const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || "";
+const SUBSCRIPTION_PRICE_ID = process.env.STRIPE_SUBSCRIPTION_PRICE_ID || "price_1TG1UPKSYfmjXmRwCcfunIZp";
+const checkoutRequests = new Map();
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: false
@@ -25,8 +30,116 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const ADMIN_ID = 1192463575;
 
+function validateTelegramInitData(initData) {
+  if (typeof initData !== "string" || !initData) {
+    throw new Error("Dati Telegram mancanti");
+  }
+
+  const params = new URLSearchParams(initData);
+  const receivedHash = params.get("hash") || "";
+  const authDate = Number(params.get("auth_date"));
+  if (!/^[a-f0-9]{64}$/i.test(receivedHash)) throw new Error("Firma Telegram non valida");
+  if (!Number.isFinite(authDate) || authDate > Math.floor(Date.now() / 1000) + 60 || Date.now() / 1000 - authDate > 600) {
+    throw new Error("Sessione Telegram scaduta; riapri il modulo dal bot");
+  }
+
+  const dataCheckString = [...params.entries()]
+    .filter(([key]) => key !== "hash")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+  const secretKey = crypto.createHmac("sha256", "WebAppData").update(process.env.BOT_TOKEN).digest();
+  const calculatedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
+  const expected = Buffer.from(calculatedHash, "hex");
+  const actual = Buffer.from(receivedHash, "hex");
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
+    throw new Error("Firma Telegram non valida");
+  }
+
+  let user;
+  try {
+    user = JSON.parse(params.get("user") || "{}");
+  } catch {
+    throw new Error("Profilo Telegram non valido");
+  }
+  if (!user.id) throw new Error("Profilo Telegram non disponibile");
+  return user;
+}
+
+app.get("/miniapp/config", (_req, res) => {
+  if (!STRIPE_PUBLISHABLE_KEY) return res.status(503).json({ error: "Pagamento non configurato" });
+  res.set("Cache-Control", "no-store").json({ publishableKey: STRIPE_PUBLISHABLE_KEY });
+});
+
+app.get("/miniapp", (_req, res) => {
+  res.set("Cache-Control", "no-store").type("html").send(`<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="color-scheme" content="light"><title>Abbonamento Myriamchannel</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script><script src="https://js.stripe.com/v3/"></script>
+<style>body{margin:0;background:#f5f7fb;color:#172033;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:560px;margin:0 auto;padding:18px 14px}.card{background:#fff;border-radius:16px;padding:18px;box-shadow:0 3px 18px #15213a12}h1{font-size:21px;margin:0 0 8px}p{line-height:1.45;color:#46536a}#status{text-align:center;padding:24px 8px;color:#46536a}.error{color:#a32626}</style></head>
+<body><main class="wrap"><section class="card"><h1>Abbonamento Myriamchannel</h1><p>Completa il pagamento in sicurezza con Stripe.</p><div id="status">Sto aprendo il modulo di pagamentoâ¦</div><div id="checkout"></div></section></main>
+<script>
+(async()=>{
+ const tg=window.Telegram?.WebApp; const status=document.getElementById('status');
+ if(!tg?.initData){status.className='error';status.textContent='Apri questo modulo dal pulsante nel bot Myriambot.';return;}
+ tg.ready(); tg.expand();
+ try{
+   const config=await fetch('/miniapp/config',{cache:'no-store'}).then(r=>r.json());
+   if(!config.publishableKey) throw new Error(config.error||'Configurazione Stripe mancante.');
+   const created=await fetch('/api/subscription-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+   const payload=await created.json(); if(!created.ok) throw new Error(payload.error||'Non riesco a preparare il pagamento.');
+   const stripe=Stripe(config.publishableKey);
+   const checkout=await stripe.initEmbeddedCheckout({clientSecret:payload.clientSecret});
+   status.remove(); checkout.mount('#checkout');
+ }catch(error){status.className='error';status.textContent=error.message||'Errore durante lâapertura del pagamento. Riprova dal bot.';}
+})();
+</script></body></html>`);
+});
+
+app.get("/checkout/return", (_req, res) => {
+  res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><script src="https://telegram.org/js/telegram-web-app.js"></script><title>Pagamento completato</title><style>body{font:17px -apple-system,BlinkMacSystemFont,sans-serif;padding:28px;color:#172033;text-align:center}button{border:0;border-radius:12px;padding:14px 22px;background:#2481cc;color:white;font-size:16px}</style></head><body><h2>Pagamento completato</h2><p>Myriambot ti invierÃ  in chat il link personale per entrare nel canale.</p><button onclick="window.Telegram?.WebApp?.close()">Torna a Telegram</button></body></html>`);
+});
+
+app.post("/api/subscription-checkout", express.json({ limit: "8kb" }), async (req, res) => {
+  if (!STRIPE_PUBLISHABLE_KEY || !process.env.STRIPE_SECRET_KEY || !process.env.BOT_TOKEN) {
+    return res.status(503).json({ error: "Pagamento temporaneamente non disponibile." });
+  }
+
+  try {
+    const user = validateTelegramInitData(req.body?.initData);
+    const userId = String(user.id);
+    const previousRequest = checkoutRequests.get(userId) || 0;
+    if (Date.now() - previousRequest < 15000) {
+      return res.status(429).json({ error: "Checkout giÃ  in preparazione. Attendi qualche secondo." });
+    }
+    checkoutRequests.set(userId, Date.now());
+
+    const firstName = user.first_name || "";
+    const lastName = user.last_name || "";
+    const username = user.username || "";
+    const fullName = [firstName, lastName].filter(Boolean).join(" ");
+    const returnUrl = new URL("/checkout/return?session_id={CHECKOUT_SESSION_ID}", CHECKOUT_MINI_APP_URL).toString();
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      ui_mode: "embedded",
+      redirect_on_completion: "if_required",
+      return_url: returnUrl,
+      client_reference_id: userId,
+      metadata: { telegramId: userId, username, firstName, lastName, fullName },
+      subscription_data: { metadata: { telegramId: userId, username, firstName, lastName, fullName } },
+      line_items: [{ price: SUBSCRIPTION_PRICE_ID, quantity: 1 }],
+    });
+
+    if (!session.client_secret) throw new Error("Stripe non ha restituito il client secret del checkout embedded");
+    return res.json({ clientSecret: session.client_secret });
+  } catch (error) {
+    console.error("â Errore creazione checkout embedded:", error.message);
+    const status = /firma|telegram|profilo|scaduta/i.test(error.message) ? 401 : 500;
+    return res.status(status).json({ error: status === 401 ? error.message : "Non riesco a preparare il pagamento. Riprova tra poco." });
+  }
+});
+
 // Evita notifiche duplicate quando Stripe riconsegna lo stesso evento
-// o invia più volte lo stesso tentativo sulla medesima fattura.
+// o invia piÃ¹ volte lo stesso tentativo sulla medesima fattura.
 // La memoria e limitata nel tempo per non crescere indefinitamente.
 const EVENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const processedEventIds = new Map();
@@ -34,7 +147,7 @@ const processingEventIds = new Set();
 const processingPaidMediaSessionIds = new Set();
 const notifiedFailureAttempts = new Map();
 
-// Questo checkout ha già ricevuto il video mentre Stripe ha registrato
+// Questo checkout ha giÃ  ricevuto il video mentre Stripe ha registrato
 // un errore successivo nel webhook. Il retry dello stesso evento va solo
 // confermato, senza inviare di nuovo il video.
 const VIDEO_ALREADY_DELIVERED_EVENT_IDS = new Set([
@@ -121,7 +234,7 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_cycle") {
     return {
       adminTitle: "Pagamento rinnovo mensile fallito!",
-      customerTitle: "Il rinnovo del tuo abbonamento non è andato a buon fine.",
+      customerTitle: "Il rinnovo del tuo abbonamento non Ã¨ andato a buon fine.",
       label: "rinnovo mensile",
     };
   }
@@ -129,7 +242,7 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_create") {
     return {
       adminTitle: "Primo pagamento abbonamento fallito!",
-      customerTitle: "Il primo pagamento del tuo abbonamento non è andato a buon fine.",
+      customerTitle: "Il primo pagamento del tuo abbonamento non Ã¨ andato a buon fine.",
       label: "primo pagamento",
     };
   }
@@ -137,14 +250,14 @@ function paymentContext(billingReason) {
   if (billingReason === "subscription_update") {
     return {
       adminTitle: "Pagamento modifica abbonamento fallito!",
-      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non è andato a buon fine.",
+      customerTitle: "Un pagamento relativo alla modifica del tuo abbonamento non Ã¨ andato a buon fine.",
       label: "modifica abbonamento",
     };
   }
 
   return {
     adminTitle: "Pagamento fattura fallito!",
-    customerTitle: "Un pagamento relativo al tuo abbonamento non è andato a buon fine.",
+    customerTitle: "Un pagamento relativo al tuo abbonamento non Ã¨ andato a buon fine.",
     label: billingReason || "fattura",
   };
 }
@@ -153,7 +266,7 @@ function failureGuidance(declineCode) {
   const guidance = {
     insufficient_funds: {
       cause: "fondi o plafond insufficienti",
-      action: "Verificare la disponibilità sulla carta oppure usare un altro metodo di pagamento.",
+      action: "Verificare la disponibilitÃ  sulla carta oppure usare un altro metodo di pagamento.",
     },
     transaction_not_allowed: {
       cause: "transazione non autorizzata dalla banca",
@@ -256,7 +369,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   cleanupNotificationCaches();
 
   if (event.id && VIDEO_ALREADY_DELIVERED_EVENT_IDS.has(event.id)) {
-    console.log(`Video già consegnato: retry Stripe confermato senza reinvio (${event.id})`);
+    console.log(`Video giÃ  consegnato: retry Stripe confermato senza reinvio (${event.id})`);
     processedEventIds.set(event.id, Date.now());
     return res.sendStatus(200);
   }
@@ -289,7 +402,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         const productIdKey = `${mediaLabel}ProductId`;
 
         if (processingPaidMediaSessionIds.has(mediaSessionId)) {
-          console.log(`Consegna ${mediaLabel} già in corso per ${mediaSessionId}; evento confermato`);
+          console.log(`Consegna ${mediaLabel} giÃ  in corso per ${mediaSessionId}; evento confermato`);
           return res.sendStatus(200);
         }
 
@@ -298,7 +411,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           session = await stripe.checkout.sessions.retrieve(mediaSessionId);
 
           if (session.metadata?.[deliveryStatusKey] === "delivered") {
-            console.log(`${mediaLabel} già consegnata per la sessione ${session.id}`);
+            console.log(`${mediaLabel} giÃ  consegnata per la sessione ${session.id}`);
           } else if (session.status !== "complete" || session.payment_status !== "paid") {
             console.log(`Pagamento ${mediaLabel} non ancora saldato: ${session.id}`);
           } else {
@@ -331,13 +444,13 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
               if (photoFileIds.length === 1) {
                 await bot.sendPhoto(telegramId, photoFileIds[0], {
                   protect_content: true,
-                  caption: `📸 ${product.name}`,
+                  caption: `ð¸ ${product.name}`,
                 });
               } else {
                 const media = photoFileIds.map((fileId, index) => ({
                   type: "photo",
                   media: fileId,
-                  ...(index === 0 ? { caption: `📸 ${product.name}` } : {}),
+                  ...(index === 0 ? { caption: `ð¸ ${product.name}` } : {}),
                 }));
                 await bot.sendMediaGroup(telegramId, media, { protect_content: true });
               }
@@ -346,7 +459,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
               if (!fileId) throw new Error(`File Telegram video mancante per ${productId}`);
               await bot.sendVideo(telegramId, fileId, {
                 protect_content: true,
-                caption: `🎬 ${product.name}`,
+                caption: `ð¬ ${product.name}`,
               });
             }
 
@@ -357,7 +470,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
             await bot.sendMessage(
               ADMIN_ID,
-              `✅ ${mediaLabel[0].toUpperCase()}${mediaLabel.slice(1)} consegnata dopo pagamento Stripe.\nTitolo: ${product.name}\nChat Telegram: ${telegramId}`
+              `â ${mediaLabel[0].toUpperCase()}${mediaLabel.slice(1)} consegnata dopo pagamento Stripe.\nTitolo: ${product.name}\nChat Telegram: ${telegramId}`
             );
           }
         } finally {
@@ -399,7 +512,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       // NOTIFICA ADMIN
       await bot.sendMessage(
         ADMIN_ID,
-        `✅ Nuovo abbonamento!\nUtente: ${displayName}`
+        `â Nuovo abbonamento!\nUtente: ${displayName}`
       );
 
       //INVITO CANALE
@@ -420,7 +533,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       if (telegramId) {
         await bot.sendMessage(
           telegramId,
-          "✅ Pagamento ricevuto! Entra nel canale:",
+          "â Pagamento ricevuto! Entra nel canale:",
           {
             reply_markup: {
               inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
@@ -473,7 +586,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         await bot.sendMessage(
           ADMIN_ID,
-          `🔁 Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} €`
+          `ð Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} â¬`
         );
       }
     }
@@ -482,7 +595,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (event.type === "invoice.payment_failed") {
       let invoice = event.data.object;
 
-      // Recupera la versione più aggiornata della fattura e il link sicuro
+      // Recupera la versione piÃ¹ aggiornata della fattura e il link sicuro
       // ospitato da Stripe per pagare o aggiornare il metodo di pagamento.
       if (invoice.id) {
         try {
@@ -501,7 +614,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         notifiedFailureAttempts.has(failureAttemptKey) ||
         persistedFailureAttempt === failureAttemptKey
       ) {
-        console.log(`Tentativo di pagamento già notificato: ${failureAttemptKey}`);
+        console.log(`Tentativo di pagamento giÃ  notificato: ${failureAttemptKey}`);
       } else {
         const context = paymentContext(invoice.billing_reason);
 
@@ -566,14 +679,14 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         await bot.sendMessage(
           ADMIN_ID,
-          `⚠️ ${context.adminTitle}\n` +
+          `â ï¸ ${context.adminTitle}\n` +
           `Utente: ${displayName}\n` +
           `Operazione: ${context.label}\n` +
           `Tentativo: ${attemptNumber}\n` +
           `Causa: ${details.cause}${codeLine}\n` +
           `Prossimo tentativo: ${nextAttempt}\n` +
           `Cosa fare: ${details.action}\n` +
-          `Il cliente non è stato rimosso dal canale.`
+          `Il cliente non Ã¨ stato rimosso dal canale.`
         );
 
         if (telegramId) {
@@ -584,7 +697,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           try {
             await bot.sendMessage(
               telegramId,
-              `⚠️ ${context.customerTitle}\n\n` +
+              `â ï¸ ${context.customerTitle}\n\n` +
               `Motivo: ${details.cause}.\n` +
               `${details.action}\n` +
               `Prossimo tentativo indicato da Stripe: ${nextAttempt}.` +
@@ -686,7 +799,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
       // L'avviso di scadenza viene inviato solo alla fine del periodo pagato;
       // cancellazioni immediate e chiusure per mancato pagamento restano terminate.
-      const endTitle = isExpired ? "⏰ Abbonamento scaduto!" : "❌ Abbonamento terminato!";
+      const endTitle = isExpired ? "â° Abbonamento scaduto!" : "â Abbonamento terminato!";
 
       //NOTIFICA ADMIN
       await bot.sendMessage(
@@ -701,7 +814,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         console.log(`Utente ${telegramId} rimosso dal canale`);
       } else {
-        console.log("❌ telegramId NON trovato");     
+        console.log("â telegramId NON trovato");     
        } 
      }   
     
