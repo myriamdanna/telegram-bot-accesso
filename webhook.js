@@ -578,8 +578,15 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       }
     }
 
-    //PAGAMENTO RINNOVO FALLITO
-    if (event.type === "invoice.payment_failed") {
+    // PAGAMENTO FALLITO
+    // Durante la registrazione il primo tentativo può risultare fallito
+    // anche se il Checkout viene poi completato correttamente. In questo caso
+    // Stripe comunica già l'esito nel Checkout: il bot invia solo la conferma
+    // quando il pagamento riesce. Gli avvisi per i rinnovi restano attivi.
+    if (
+      event.type === "invoice.payment_failed" &&
+      event.data.object.billing_reason !== "subscription_create"
+    ) {
       let invoice = event.data.object;
 
       // Recupera la versione più aggiornata della fattura e il link sicuro
