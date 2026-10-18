@@ -364,7 +364,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     return res.sendStatus(400);
   }
 
-  console.log("EVENT RICEVUTO:", event.type);
+  console.log("EVENT RICEVUTO:", event.type, "ID:", event.id);
 
   cleanupNotificationCaches();
 
@@ -477,71 +477,58 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           processingPaidMediaSessionIds.delete(mediaSessionId);
         }
       } else if (event.type === "checkout.session.completed") {
+        if (session.mode !== "subscription" || session.status !== "complete" || session.payment_status !== "paid") {
+          console.log(`Checkout ignorato per accesso canale: mode=${session.mode}; status=${session.status}; payment_status=${session.payment_status}; session=${session.id}`);
+        } else {
+          let telegramId = session.client_reference_id || session.metadata?.telegramId || null;
+          let username = session.metadata?.username || "";
+          let firstName = session.metadata?.firstName || "";
+          let lastName = session.metadata?.lastName || "";
+          let fullName = session.metadata?.fullName || "";
 
-      let telegramId =
-        session.client_reference_id ||
-        session.metadata?.telegramId ||
-        null;
+          // Fallback ai metadata del cliente, se presenti.
+          if ((!telegramId || !username || !fullName) && session.customer) {
+            const customer = await stripe.customers.retrieve(session.customer);
+            telegramId = telegramId || customer.metadata?.telegramId || null;
+            username = username || customer.metadata?.username || "";
+            firstName = firstName || customer.metadata?.firstName || "";
+            lastName = lastName || customer.metadata?.lastName || "";
+            fullName = fullName || customer.metadata?.fullName || `${firstName} ${lastName}`.trim();
+          }
 
-      let username = session.metadata?.username || "";
-      let firstName = session.metadata?.firstName || "";
-      let lastName = session.metadata?.lastName || "";
-      let fullName = session.metadata?.fullName || "";
+          const displayName = fullName && username
+            ? `${fullName} (@${username})`
+            : fullName || (username ? `@${username}` : "Sconosciuto");
 
-      // FALLBACK CUSTOMER STRIPE
-      if ((!telegramId || !username || !fullName) && session.customer) {
-        const customer = await stripe.customers.retrieve(session.customer);
+          if (!telegramId) {
+            throw new Error(`Checkout pagato senza Telegram ID: sessione ${session.id}`);
+          }
+          console.log(`Checkout pagato verificato: session=${session.id}; telegram=${telegramId}; subscription=${session.subscription || "n/d"}`);
 
-        telegramId = telegramId || customer.metadata?.telegramId || null;
-        username = username || customer.metadata?.username || "";
-        firstName = firstName || customer.metadata?.firstName || "";
-        lastName = lastName || customer.metadata?.lastName || "";
-        fullName = fullName || customer.metadata?.fullName || `${firstName} ${lastName}`.trim();
-      } 
+          await bot.sendMessage(
+            ADMIN_ID,
+            `â Nuovo abbonamento!\nUtente: ${displayName}`
+          );
 
-      //NOME FINALE
-      const displayName = 
-          fullName && username 
-          ? `${fullName} (@${username})`
-          : fullName
-          ? fullName
-          : username
-          ? `@${username}`
-          : "Sconosciuto";
-                        
-      // NOTIFICA ADMIN
-      await bot.sendMessage(
-        ADMIN_ID,
-        `â Nuovo abbonamento!\nUtente: ${displayName}`
-      );
+          // Link personale monouso, con durata mantenuta a 3 minuti.
+          const invite = await bot.createChatInviteLink(CHANNEL_ID, {
+            expire_date: Math.floor(Date.now() / 1000) + 180,
+            member_limit: 1,
+            creates_join_request: false,
+            name: username ? `user_${username}` : `user_${telegramId}`,
+          });
+          console.log(`Link invito creato: session=${session.id}; telegram=${telegramId}; expires_in=180s`);
 
-      //INVITO CANALE
-      const invite = await bot.createChatInviteLink(CHANNEL_ID, {
-        expire_date: Math.floor(Date.now() / 1000) + 180,
-        member_limit: 1,
-        creates_join_request: false,
-        name: username 
-          ? `user_${username}` 
-          : `user_${telegramId}`,
-      });
-
-      const inviteLink = invite.invite_link;
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      //INVIO LINK UTENTE
-      if (telegramId) {
-        await bot.sendMessage(
-          telegramId,
-          "â Pagamento ricevuto! Entra nel canale:",
-          {
-            reply_markup: {
-              inline_keyboard: [[{ text: "Entra", url: inviteLink }]],
-            },
-          } 
-        );
-       }  
-     }  
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          await bot.sendMessage(
+            telegramId,
+            "â Pagamento ricevuto! Entra nel canale:",
+            { reply_markup: { inline_keyboard: [[{ text: "Entra", url: invite.invite_link }]] } }
+          );
+          console.log(`Messaggio invito consegnato a Telegram ${telegramId}; session=${session.id}`);
+        }
+      }
+    }
 
    //RINNOVO ABBONAMENTO PAGATO
     if (event.type === "invoice.paid") {
@@ -733,7 +720,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
      }  
       }
     }
-    }
     
     //ABBONAMENTO TERMINATO
     if (event.type === "customer.subscription.deleted") {
@@ -821,7 +807,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
      if (event.id) processedEventIds.set(event.id, Date.now());
      res.sendStatus(200);
    } catch (err) {
-     console.log(err);
+     console.error(`Errore elaborazione webhook ${event.id} (${event.type}):`, err);
      res.sendStatus(500);
    } finally {
      if (event.id) processingEventIds.delete(event.id);
