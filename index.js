@@ -522,10 +522,7 @@ bot.on("message", async (msg) => {
     "👋 Ciao! Per iscriverti a Myriamchannel, premi il pulsante qui sotto: si aprirà subito il modulo di pagamento Stripe.",
     {
       reply_markup: {
-        inline_keyboard: [
-          [{ text: "💳 Voglio abbonarmi", web_app: { url: CHECKOUT_MINI_APP_URL } }],
-          [{ text: "🔄 Non riesco a entrare", callback_data: "recover_channel_access" }],
-        ],
+        inline_keyboard: [[{ text: "💳 Voglio abbonarmi", web_app: { url: CHECKOUT_MINI_APP_URL } }]],
       },
     }
   );
