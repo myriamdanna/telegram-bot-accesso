@@ -30,8 +30,8 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "";
 const BOT_USERNAME = "Myriamchannelbot";
 const CHECKOUT_MINI_APP_URL = process.env.CHECKOUT_MINI_APP_URL || "https://stripe-webhook-udt3.onrender.com/miniapp";
 
-const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 00;
-const HEALTH_CHECK_TIMEOUT_MS = 15 * 00;
+const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+const HEALTH_CHECK_TIMEOUT_MS = 15 * 1000;
 const MAX_CONSECUTIVE_HEALTH_FAILURES = 3;
 const RESTART_DELAY_MS = 5000;
 
