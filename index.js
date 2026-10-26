@@ -23,7 +23,6 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PRICE_ID_5_EURO = "price_1TG1UPKSYfmjXmRwCcfunIZp";
-const PRICE_ID_10_EURO = "price_1U8HRWKSYfmjXmRwxjE916lj";
 
 // Inserire su Render una variabile ADMIN_CHAT_ID con il Chat ID di Myriam.
 // Se non è configurata, il bot continua a funzionare e scrive gli avvisi nei log.
@@ -31,8 +30,8 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "";
 const BOT_USERNAME = "Myriamchannelbot";
 const CHECKOUT_MINI_APP_URL = process.env.CHECKOUT_MINI_APP_URL || "https://stripe-webhook-udt3.onrender.com/miniapp";
 
-const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000;
-const HEALTH_CHECK_TIMEOUT_MS = 15 * 1000;
+const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 00;
+const HEALTH_CHECK_TIMEOUT_MS = 15 * 00;
 const MAX_CONSECUTIVE_HEALTH_FAILURES = 3;
 const RESTART_DELAY_MS = 5000;
 
@@ -40,10 +39,6 @@ let consecutiveHealthFailures = 0;
 let restartScheduled = false;
 let shutdownInProgress = false;
 const accessRecoveryRequests = new Map();
-
-// 1° settembre 2026, ore 00:00 in Italia
-const CAMBIO_PREZZO = Date.UTC(2026, 7, 31, 22, 0, 0);
-
 
 function errorDetails(error) {
   if (!error) return "errore sconosciuto";
