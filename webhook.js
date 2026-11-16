@@ -5,7 +5,8 @@
 // - distingue i pagamenti una tantum di video e foto dagli abbonamenti
 // - dopo il pagamento verificato consegna video o pacchetti da 1 a 10 foto
 //   in chat privata protetta
-// - lascia invariati rinnovi, avvisi e accesso al canale in abbonamento
+// - mantiene invariati i messaggi amministrativi e aggiunge avvisi chiari
+//   al cliente per insoluto, promemoria pre-retry e annullamento per mancato pagamento
 // ============================================================
 
 const express = require("express");
@@ -146,6 +147,11 @@ const processedEventIds = new Map();
 const processingEventIds = new Set();
 const processingPaidMediaSessionIds = new Set();
 const notifiedFailureAttempts = new Map();
+const sendingPreRetryReminders = new Set();
+const PRE_RETRY_REMINDER_LEAD_SECONDS = 24 * 60 * 60;
+const PRE_RETRY_REMINDER_SCAN_INTERVAL_MS = 15 * 60 * 1000;
+const PRE_RETRY_REMINDER_LOOKBACK_SECONDS = 14 * 24 * 60 * 60;
+let preRetryReminderScanRunning = false;
 
 // Questo checkout ha già ricevuto il video mentre Stripe ha registrato
 // un errore successivo nel webhook. Il retry dello stesso evento va solo
@@ -344,6 +350,140 @@ async function paymentFailureDetails(invoice) {
     networkCode,
     ...failureGuidance(declineCode),
   };
+}
+
+async function subscriberContact(subscription, customerId) {
+  const customer = customerId ? await stripe.customers.retrieve(customerId) : null;
+  return {
+    telegramId:
+      subscription?.metadata?.telegramId ||
+      customer?.metadata?.telegramId ||
+      null,
+    username:
+      subscription?.metadata?.username ||
+      customer?.metadata?.username ||
+      "",
+    firstName:
+      subscription?.metadata?.firstName ||
+      customer?.metadata?.firstName ||
+      "",
+    lastName:
+      subscription?.metadata?.lastName ||
+      customer?.metadata?.lastName ||
+      "",
+    fullName:
+      subscription?.metadata?.fullName ||
+      customer?.metadata?.fullName ||
+      `${subscription?.metadata?.firstName || customer?.metadata?.firstName || ""} ${subscription?.metadata?.lastName || customer?.metadata?.lastName || ""}`.trim(),
+  };
+}
+
+async function sendPreRetryReminder(invoice) {
+  if (sendingPreRetryReminders.has(invoice.id)) return;
+  sendingPreRetryReminders.add(invoice.id);
+
+  try {
+    const attemptNumber = Number.parseInt(invoice.metadata?.myriambot_pre_retry_attempt || "0", 10);
+    const dueAt = Number.parseInt(invoice.metadata?.myriambot_pre_retry_reminder_at || "0", 10);
+    const lastTriedAt = Number.parseInt(invoice.metadata?.myriambot_pre_retry_last_try_at || "0", 10);
+    const now = Math.floor(Date.now() / 1000);
+
+    if (
+      invoice.status !== "open" ||
+      invoice.paid ||
+      !invoice.next_payment_attempt ||
+      !attemptNumber ||
+      !dueAt ||
+      invoice.attempt_count !== attemptNumber ||
+      now < dueAt ||
+      invoice.metadata?.myriambot_pre_retry_reminder_sent_at ||
+      now - lastTriedAt < 30 * 60
+    ) {
+      return;
+    }
+
+    const subscriptionId = valueId(
+      invoice.subscription || invoice.parent?.subscription_details?.subscription
+    );
+    const customerId = valueId(invoice.customer);
+    const subscription = subscriptionId
+      ? await stripe.subscriptions.retrieve(subscriptionId)
+      : null;
+    const contact = await subscriberContact(subscription, customerId);
+
+    if (!contact.telegramId) {
+      console.log(`Promemoria insoluto non inviato: Telegram ID mancante per fattura ${invoice.id}`);
+      await stripe.invoices.update(invoice.id, {
+        metadata: { myriambot_pre_retry_last_try_at: String(now) },
+      });
+      return;
+    }
+
+    const details = await paymentFailureDetails(invoice);
+    const nextAttempt = formatStripeDate(invoice.next_payment_attempt);
+    const paymentLink = invoice.hosted_invoice_url || "";
+    const message =
+      "⏳ Ti ricordiamo che il rinnovo di Myriamchannel è ancora da regolarizzare.\n\n" +
+      `Motivo segnalato: ${details.cause}. ${details.action}\n\n` +
+      `Stripe riproverà il pagamento il ${nextAttempt}. È l’ultimo tentativo previsto: se non andrà a buon fine, l’abbonamento verrà annullato e perderai l’accesso al canale.` +
+      (paymentLink
+        ? "\n\nPuoi regolarizzare il pagamento in sicurezza dal pulsante qui sotto."
+        : "");
+
+    await bot.sendMessage(contact.telegramId, message, paymentLink ? {
+      reply_markup: {
+        inline_keyboard: [[{ text: "💳 Regolarizza il pagamento", url: paymentLink }]],
+      },
+    } : {});
+
+    await stripe.invoices.update(invoice.id, {
+      metadata: { myriambot_pre_retry_reminder_sent_at: String(now) },
+    });
+    console.log(`Promemoria pre-retry inviato a Telegram ${contact.telegramId}; fattura ${invoice.id}`);
+  } catch (error) {
+    console.error(`Errore invio promemoria pre-retry per fattura ${invoice.id}:`, error.message);
+    try {
+      await stripe.invoices.update(invoice.id, {
+        metadata: { myriambot_pre_retry_last_try_at: String(Math.floor(Date.now() / 1000)) },
+      });
+    } catch (metadataError) {
+      console.error(`Impossibile registrare il tentativo promemoria per fattura ${invoice.id}:`, metadataError.message);
+    }
+  } finally {
+    sendingPreRetryReminders.delete(invoice.id);
+  }
+}
+
+async function scanForDuePreRetryReminders() {
+  if (preRetryReminderScanRunning) return;
+  preRetryReminderScanRunning = true;
+
+  try {
+    const createdAfter = Math.floor(Date.now() / 1000) - PRE_RETRY_REMINDER_LOOKBACK_SECONDS;
+    let startingAfter;
+
+    for (let page = 0; page < 10; page += 1) {
+      const result = await stripe.invoices.list({
+        status: "open",
+        created: { gte: createdAfter },
+        limit: 100,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+
+      for (const invoice of result.data || []) {
+        if (invoice.metadata?.myriambot_pre_retry_reminder_at) {
+          await sendPreRetryReminder(invoice);
+        }
+      }
+
+      if (!result.has_more || !result.data?.length) break;
+      startingAfter = result.data[result.data.length - 1].id;
+    }
+  } catch (error) {
+    console.error("Errore controllo promemoria pagamenti insoluti:", error.message);
+  } finally {
+    preRetryReminderScanRunning = false;
+  }
 }
 
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
@@ -662,6 +802,9 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         const details = await paymentFailureDetails(invoice);
         const nextAttempt = formatStripeDate(invoice.next_payment_attempt);
+        const reminderAt = invoice.next_payment_attempt
+          ? Number(invoice.next_payment_attempt) - PRE_RETRY_REMINDER_LEAD_SECONDS
+          : 0;
         const codeParts = [
           details.declineCode,
           details.networkCode ? `circuito ${details.networkCode}` : "",
@@ -683,26 +826,35 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           `Il cliente non è stato rimosso dal canale.`
         );
 
-        if (telegramId) {
-          const paymentLink = invoice.hosted_invoice_url
-            ? `\n\nPuoi regolarizzare il pagamento in sicurezza qui:\n${invoice.hosted_invoice_url}`
-            : "";
-
+        let customerNoticeStatus = "telegram_id_missing";
+        if (telegramId && attemptNumber === 1) {
+          const paymentLink = invoice.hosted_invoice_url || "";
+          const customerMessage =
+            `⚠️ ${context.customerTitle}\n\n` +
+            `Motivo segnalato: ${details.cause}. ${details.action}\n\n` +
+            `Stripe riproverà il pagamento il ${nextAttempt}. È l’ultimo tentativo previsto: se non andrà a buon fine, l’abbonamento verrà annullato e perderai l’accesso al canale.` +
+            (paymentLink
+              ? "\n\nPer mantenere l’accesso, puoi regolarizzare il pagamento dal pulsante qui sotto."
+              : "");
           try {
-            await bot.sendMessage(
-              telegramId,
-              `⚠️ ${context.customerTitle}\n\n` +
-              `Motivo: ${details.cause}.\n` +
-              `${details.action}\n` +
-              `Prossimo tentativo indicato da Stripe: ${nextAttempt}.` +
-              paymentLink
-            );
+            await bot.sendMessage(telegramId, customerMessage, paymentLink ? {
+              reply_markup: {
+                inline_keyboard: [[{ text: "💳 Regolarizza il pagamento", url: paymentLink }]],
+              },
+            } : {});
+            customerNoticeStatus = "sent";
+            console.log(`Avviso primo insoluto consegnato a Telegram ${telegramId}; fattura ${invoice.id}`);
           } catch (error) {
+            customerNoticeStatus = "telegram_error";
             console.log(
               `Impossibile avvisare su Telegram l'utente ${telegramId}:`,
               error.message
             );
           }
+        } else if (telegramId) {
+          // Il messaggio di annullamento viene inviato dal relativo evento
+          // customer.subscription.deleted, evitando due avvisi ravvicinati.
+          customerNoticeStatus = "final_failure_waiting_for_cancellation_event";
         } else {
           console.log("Telegram ID non trovato: avviso cliente non inviato");
         }
@@ -713,10 +865,16 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         // riconsegna successiva a un riavvio di Render non genera duplicati.
         if (invoice.id) {
           try {
+            const notificationMetadata = {
+              myriambot_failure_notification: failureAttemptKey,
+              myriambot_customer_notice_status: customerNoticeStatus,
+            };
+            if (attemptNumber === 1 && reminderAt > 0) {
+              notificationMetadata.myriambot_pre_retry_reminder_at = String(reminderAt);
+              notificationMetadata.myriambot_pre_retry_attempt = String(attemptNumber);
+            }
             await stripe.invoices.update(invoice.id, {
-              metadata: {
-                myriambot_failure_notification: failureAttemptKey,
-              },
+              metadata: notificationMetadata,
             });
           } catch (error) {
             console.log(
@@ -800,6 +958,19 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         `${endTitle}\nUtente: ${displayName}`
       );
 
+      if (cancellationReason === "payment_failed" && telegramId) {
+        try {
+          await bot.sendMessage(
+            telegramId,
+            "❌ Il tuo abbonamento a Myriamchannel è stato annullato perché il pagamento non è andato a buon fine dopo i tentativi previsti.\n\n" +
+            "L’accesso al canale è stato terminato. Se hai già regolarizzato il pagamento o pensi che ci sia un errore, contatta Myriam per verificare la situazione."
+          );
+          console.log(`Avviso annullamento per insoluto consegnato a Telegram ${telegramId}; subscription ${subscription.id}`);
+        } catch (error) {
+          console.error(`Impossibile inviare a Telegram ${telegramId} l'avviso di annullamento:`, error.message);
+        }
+      }
+
       //RIMOZIONE DAL CANALE
       if (telegramId) { 
         await bot.banChatMember(CHANNEL_ID, telegramId);
@@ -824,3 +995,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Webhook attivo"));
+
+// Il promemoria viene ricostruito dalle fatture Stripe aperte e dai metadata:
+// resta programmato anche se il servizio viene riavviato prima della scadenza.
+setTimeout(() => { void scanForDuePreRetryReminders(); }, 10 * 1000);
+setInterval(() => { void scanForDuePreRetryReminders(); }, PRE_RETRY_REMINDER_SCAN_INTERVAL_MS);
