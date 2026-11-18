@@ -957,8 +957,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       // cancellazioni immediate e chiusure per mancato pagamento restano terminate.
       const endTitle = isExpired ? "⏰ Abbonamento scaduto!" : "❌ Abbonamento terminato!";
 
-      // Per insoluto, prima rimuove davvero l'utente e poi conferma l'esito
-      // a Myriam. Così il messaggio non dichiara una rimozione non avvenuta.
+      // Per insoluto i due avvisi a Myriam vengono inviati dopo la rimozione:
+      // prima l'abbonamento terminato, poi il dettaglio del secondo tentativo.
       // Gli altri tipi di chiusura mantengono la notifica amministrativa usuale.
       if (cancellationReason !== "payment_failed") {
         await bot.sendMessage(
@@ -988,21 +988,43 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
       if (cancellationReason === "payment_failed") {
         let attemptNumber = 2; // La policy prevede due tentativi: il secondo è quello finale.
+        let failureCause = "pagamento rifiutato";
+        let failureCodeLine = "";
+        let failureAdminTitle = "Pagamento rinnovo mensile fallito!";
+        let failureOperation = "rinnovo mensile";
         try {
           const latestInvoiceId = valueId(subscription.latest_invoice);
           if (latestInvoiceId) {
             const latestInvoice = await stripe.invoices.retrieve(latestInvoiceId);
             if (latestInvoice.attempt_count) attemptNumber = latestInvoice.attempt_count;
+            const failureDetails = await paymentFailureDetails(latestInvoice);
+            failureCause = failureDetails.cause;
+            const failureContext = paymentContext(latestInvoice.billing_reason);
+            failureAdminTitle = failureContext.adminTitle;
+            failureOperation = failureContext.label;
+            const codeParts = [
+              failureDetails.declineCode,
+              failureDetails.networkCode ? `circuito ${failureDetails.networkCode}` : "",
+            ].filter(Boolean);
+            if (codeParts.length) failureCodeLine = `\nCodice: ${codeParts.join(" - ")}`;
           }
         } catch (error) {
-          console.log("Impossibile recuperare il numero dei tentativi Stripe:", error.message);
+          console.log("Impossibile recuperare i dettagli dell'ultimo pagamento Stripe:", error.message);
         }
 
+        // Primo messaggio: mantenere l'avviso separato di abbonamento terminato.
+        await bot.sendMessage(
+          ADMIN_ID,
+          `${endTitle}\nUtente: ${displayName}`
+        );
+
+        // Secondo messaggio: causa e risultato della rimozione. Non include
+        // un prossimo tentativo né istruzioni destinate al cliente.
         await bot.sendMessage(
           ADMIN_ID,
           channelRemovalSucceeded
-            ? `❌ Abbonamento terminato dopo il secondo e ultimo tentativo fallito.\nUtente: ${displayName}\nTentativo: ${attemptNumber}\n✅ Cliente rimosso dal canale Telegram.`
-            : `❌ Abbonamento terminato dopo il secondo e ultimo tentativo fallito.\nUtente: ${displayName}\nTentativo: ${attemptNumber}\n⚠️ Rimozione dal canale Telegram non riuscita: ${channelRemovalError?.message || "errore non specificato"}.`
+            ? `⚠️ ${failureAdminTitle}\nUtente: ${displayName}\nOperazione: ${failureOperation}\nTentativo: ${attemptNumber}\nCausa: ${failureCause}${failureCodeLine}\n✅ Utente rimosso dal canale Telegram.`
+            : `⚠️ ${failureAdminTitle}\nUtente: ${displayName}\nOperazione: ${failureOperation}\nTentativo: ${attemptNumber}\nCausa: ${failureCause}${failureCodeLine}\n⚠️ Rimozione dal canale Telegram non riuscita: ${channelRemovalError?.message || "errore non specificato"}.`
         );
       }
 
