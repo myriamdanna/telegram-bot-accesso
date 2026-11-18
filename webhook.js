@@ -814,17 +814,22 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           ? `\nCodice: ${codeParts.join(" - ")}`
           : "";
 
-        await bot.sendMessage(
-          ADMIN_ID,
-          `⚠️ ${context.adminTitle}\n` +
-          `Utente: ${displayName}\n` +
-          `Operazione: ${context.label}\n` +
-          `Tentativo: ${attemptNumber}\n` +
-          `Causa: ${details.cause}${codeLine}\n` +
-          `Prossimo tentativo: ${nextAttempt}\n` +
-          `Cosa fare: ${details.action}\n` +
-          `Il cliente non è stato rimosso dal canale.`
-        );
+        // Il secondo tentativo è quello definitivo: l'avviso amministrativo
+        // viene inviato dall'evento subscription.deleted, dopo aver verificato
+        // l'effettiva rimozione dal canale. Qui si avvisa Myriam solo al primo
+        // insoluto, quando il cliente ha ancora tre giorni per regolarizzare.
+        if (attemptNumber === 1) {
+          await bot.sendMessage(
+            ADMIN_ID,
+            `⚠️ ${context.adminTitle}\n` +
+            `Utente: ${displayName}\n` +
+            `Operazione: ${context.label}\n` +
+            `Tentativo: ${attemptNumber}\n` +
+            `Causa: ${details.cause}${codeLine}\n` +
+            `Prossimo tentativo: ${nextAttempt}\n` +
+            `Cosa fare: ${details.action}`
+          );
+        }
 
         let customerNoticeStatus = "telegram_id_missing";
         if (telegramId && attemptNumber === 1) {
@@ -852,8 +857,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
             );
           }
         } else if (telegramId) {
-          // Il messaggio di annullamento viene inviato dal relativo evento
-          // customer.subscription.deleted, evitando due avvisi ravvicinati.
+          // Il messaggio finale al cliente e l'avviso a Myriam vengono inviati
+          // dall'evento customer.subscription.deleted, dopo la rimozione.
           customerNoticeStatus = "final_failure_waiting_for_cancellation_event";
         } else {
           console.log("Telegram ID non trovato: avviso cliente non inviato");
@@ -952,13 +957,56 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       // cancellazioni immediate e chiusure per mancato pagamento restano terminate.
       const endTitle = isExpired ? "⏰ Abbonamento scaduto!" : "❌ Abbonamento terminato!";
 
-      //NOTIFICA ADMIN
-      await bot.sendMessage(
-        ADMIN_ID,
-        `${endTitle}\nUtente: ${displayName}`
-      );
+      // Per insoluto, prima rimuove davvero l'utente e poi conferma l'esito
+      // a Myriam. Così il messaggio non dichiara una rimozione non avvenuta.
+      // Gli altri tipi di chiusura mantengono la notifica amministrativa usuale.
+      if (cancellationReason !== "payment_failed") {
+        await bot.sendMessage(
+          ADMIN_ID,
+          `${endTitle}\nUtente: ${displayName}`
+        );
+      }
 
-      if (cancellationReason === "payment_failed" && telegramId) {
+      let channelRemovalSucceeded = false;
+      let channelRemovalError = null;
+
+      //RIMOZIONE DAL CANALE
+      if (telegramId) {
+        try {
+          await bot.banChatMember(CHANNEL_ID, telegramId);
+          await bot.unbanChatMember(CHANNEL_ID, telegramId);
+          channelRemovalSucceeded = true;
+          console.log(`Utente ${telegramId} rimosso dal canale`);
+        } catch (error) {
+          channelRemovalError = error;
+          console.error(`Errore rimozione utente ${telegramId} dal canale:`, error.message);
+        }
+      } else {
+        channelRemovalError = new Error("Telegram ID non trovato nei metadata Stripe");
+        console.error("❌ telegramId NON trovato");
+      }
+
+      if (cancellationReason === "payment_failed") {
+        let attemptNumber = 2; // La policy prevede due tentativi: il secondo è quello finale.
+        try {
+          const latestInvoiceId = valueId(subscription.latest_invoice);
+          if (latestInvoiceId) {
+            const latestInvoice = await stripe.invoices.retrieve(latestInvoiceId);
+            if (latestInvoice.attempt_count) attemptNumber = latestInvoice.attempt_count;
+          }
+        } catch (error) {
+          console.log("Impossibile recuperare il numero dei tentativi Stripe:", error.message);
+        }
+
+        await bot.sendMessage(
+          ADMIN_ID,
+          channelRemovalSucceeded
+            ? `❌ Abbonamento terminato dopo il secondo e ultimo tentativo fallito.\nUtente: ${displayName}\nTentativo: ${attemptNumber}\n✅ Cliente rimosso dal canale Telegram.`
+            : `❌ Abbonamento terminato dopo il secondo e ultimo tentativo fallito.\nUtente: ${displayName}\nTentativo: ${attemptNumber}\n⚠️ Rimozione dal canale Telegram non riuscita: ${channelRemovalError?.message || "errore non specificato"}.`
+        );
+      }
+
+      if (cancellationReason === "payment_failed" && telegramId && channelRemovalSucceeded) {
         try {
           await bot.sendMessage(
             telegramId,
@@ -971,15 +1019,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         }
       }
 
-      //RIMOZIONE DAL CANALE
-      if (telegramId) { 
-        await bot.banChatMember(CHANNEL_ID, telegramId);
-        await bot.unbanChatMember(CHANNEL_ID, telegramId);
-
-        console.log(`Utente ${telegramId} rimosso dal canale`);
-      } else {
-        console.log("❌ telegramId NON trovato");     
-       } 
+      if (channelRemovalError) throw channelRemovalError;
      }   
     
      if (event.id) processedEventIds.set(event.id, Date.now());
