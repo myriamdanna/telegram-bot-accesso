@@ -151,7 +151,9 @@ const sendingPreRetryReminders = new Set();
 const PRE_RETRY_REMINDER_LEAD_SECONDS = 24 * 60 * 60;
 const PRE_RETRY_REMINDER_SCAN_INTERVAL_MS = 15 * 60 * 1000;
 const PRE_RETRY_REMINDER_LOOKBACK_SECONDS = 14 * 24 * 60 * 60;
+const LATE_ACCESS_SCAN_LOOKBACK_SECONDS = 45 * 24 * 60 * 60;
 let preRetryReminderScanRunning = false;
+let lateAccessScanRunning = false;
 
 // Questo checkout ha già ricevuto il video mentre Stripe ha registrato
 // un errore successivo nel webhook. Il retry dello stesso evento va solo
@@ -378,6 +380,55 @@ async function subscriberContact(subscription, customerId) {
   };
 }
 
+// Restituisce un eventuale abbonamento ancora attivo associato allo stesso
+// utente Telegram, anche quando Stripe ha creato più customer per la persona.
+async function findOtherActiveSubscription(telegramId, excludedSubscriptionId) {
+  if (!telegramId) return null;
+
+  let startingAfter;
+  do {
+    const page = await stripe.subscriptions.list({
+      status: "active",
+      limit: 100,
+      ...(startingAfter ? { starting_after: startingAfter } : {}),
+    });
+
+    for (const candidate of page.data) {
+      if (candidate.id === excludedSubscriptionId) continue;
+      if (String(candidate.metadata?.telegramId || "") === String(telegramId)) {
+        return candidate;
+      }
+
+      // Compatibilità con vecchi abbonamenti che potrebbero avere il Telegram
+      // ID solo nei metadata del customer Stripe.
+      if (!candidate.metadata?.telegramId && candidate.customer) {
+        try {
+          const customer = await stripe.customers.retrieve(valueId(candidate.customer));
+          if (String(customer.metadata?.telegramId || "") === String(telegramId)) {
+            return candidate;
+          }
+        } catch (error) {
+          console.log(`Impossibile verificare il customer ${valueId(candidate.customer)}:`, error.message);
+        }
+      }
+    }
+
+    if (!page.has_more || page.data.length === 0) return null;
+    startingAfter = page.data[page.data.length - 1].id;
+  } while (startingAfter);
+
+  return null;
+}
+
+function invoicePaidPeriodEnd(invoice, subscription) {
+  const linePeriodEnds = (invoice.lines?.data || [])
+    .map((line) => Number(line.period?.end || 0))
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  const invoicePeriodEnd = Number(invoice.period_end || 0);
+  const subscriptionPeriodEnd = Number(subscription?.current_period_end || 0);
+  return Math.max(0, ...linePeriodEnds, invoicePeriodEnd, subscriptionPeriodEnd);
+}
+
 async function sendPreRetryReminder(invoice) {
   if (sendingPreRetryReminders.has(invoice.id)) return;
   sendingPreRetryReminders.add(invoice.id);
@@ -483,6 +534,80 @@ async function scanForDuePreRetryReminders() {
     console.error("Errore controllo promemoria pagamenti insoluti:", error.message);
   } finally {
     preRetryReminderScanRunning = false;
+  }
+}
+
+// Chiude l'accesso concesso da una fattura pagata in ritardo quando termina
+// il periodo saldato, a meno che nel frattempo esista un altro abbonamento attivo.
+async function scanForDueLatePaymentAccessExpirations() {
+  if (lateAccessScanRunning) return;
+  lateAccessScanRunning = true;
+
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const createdAfter = now - LATE_ACCESS_SCAN_LOOKBACK_SECONDS;
+    let startingAfter;
+
+    for (let page = 0; page < 5; page += 1) {
+      const result = await stripe.invoices.list({
+        status: "paid",
+        created: { gte: createdAfter },
+        limit: 100,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+
+      for (const invoice of result.data || []) {
+        const accessUntil = Number.parseInt(
+          invoice.metadata?.myriambot_late_access_until || "0",
+          10
+        );
+        const telegramId = invoice.metadata?.myriambot_late_access_telegram_id || "";
+        const subscriptionId = invoice.metadata?.myriambot_late_access_subscription_id || "";
+
+        if (
+          !accessUntil ||
+          !telegramId ||
+          now < accessUntil ||
+          invoice.metadata?.myriambot_late_access_expiration_handled_at
+        ) {
+          continue;
+        }
+
+        const activeSubscription = await findOtherActiveSubscription(
+          telegramId,
+          subscriptionId
+        );
+        if (activeSubscription) {
+          await stripe.invoices.update(invoice.id, {
+            metadata: {
+              myriambot_late_access_expiration_handled_at: String(now),
+            },
+          });
+          console.log(
+            `Accesso tardivo mantenuto per Telegram ${telegramId}: abbonamento attivo ${activeSubscription.id}`
+          );
+          continue;
+        }
+
+        await bot.banChatMember(CHANNEL_ID, telegramId);
+        await bot.unbanChatMember(CHANNEL_ID, telegramId);
+        await stripe.invoices.update(invoice.id, {
+          metadata: {
+            myriambot_late_access_expiration_handled_at: String(now),
+          },
+        });
+        console.log(
+          `Accesso del pagamento tardivo terminato per Telegram ${telegramId}; fattura ${invoice.id}`
+        );
+      }
+
+      if (!result.has_more || !result.data?.length) break;
+      startingAfter = result.data[result.data.length - 1].id;
+    }
+  } catch (error) {
+    console.error("Errore controllo scadenze accessi da pagamenti tardivi:", error.message);
+  } finally {
+    lateAccessScanRunning = false;
   }
 }
 
@@ -670,32 +795,49 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       }
     }
 
-   //RINNOVO ABBONAMENTO PAGATO
+   // PAGAMENTO DI UNA FATTURA DI RINNOVO
     if (event.type === "invoice.paid") {
-      const invoice = event.data.object;
+      let invoice = event.data.object;
+      if (invoice.id) {
+        try {
+          invoice = await stripe.invoices.retrieve(invoice.id, {
+            expand: ["lines.data"],
+          });
+        } catch (error) {
+          console.log(`Impossibile aggiornare i dati della fattura ${invoice.id}:`, error.message);
+        }
+      }
 
       if (invoice.billing_reason === "subscription_cycle") {
-        const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-        const customer = await stripe.customers.retrieve(invoice.customer);
+        const subscriptionId = valueId(
+          invoice.subscription || invoice.parent?.subscription_details?.subscription
+        );
+        const subscription = subscriptionId
+          ? await stripe.subscriptions.retrieve(subscriptionId)
+          : null;
+        const customerId = valueId(invoice.customer);
+        const customer = customerId
+          ? await stripe.customers.retrieve(customerId)
+          : null;
 
         let username =
-          subscription.metadata?.username ||
-          customer.metadata?.username ||
+          subscription?.metadata?.username ||
+          customer?.metadata?.username ||
           "";
 
         let firstName =
-          subscription.metadata?.firstName ||
-          customer.metadata?.firstName ||
+          subscription?.metadata?.firstName ||
+          customer?.metadata?.firstName ||
           "";
 
         let lastName =
-          subscription.metadata?.lastName ||
-          customer.metadata?.lastName ||
+          subscription?.metadata?.lastName ||
+          customer?.metadata?.lastName ||
           "";
 
         let fullName =
-          subscription.metadata?.fullName ||
-          customer.metadata?.fullName ||
+          subscription?.metadata?.fullName ||
+          customer?.metadata?.fullName ||
           `${firstName} ${lastName}`.trim();
 
         const displayName =
@@ -711,10 +853,91 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           .toFixed(2)
           .replace(".", ",");
 
-        await bot.sendMessage(
-          ADMIN_ID,
-          `🔁 Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} €`
-        );
+        if (invoice.status === "paid" && subscription?.status === "active") {
+          await bot.sendMessage(
+            ADMIN_ID,
+            `🔁 Abbonamento rinnovato!\nUtente: ${displayName}\nImporto: ${amount} €`
+          );
+        } else if (
+          invoice.status === "paid" &&
+          subscription?.status === "canceled" &&
+          !invoice.metadata?.myriambot_late_payment_link_sent_at
+        ) {
+          const contact = await subscriberContact(subscription, customerId);
+          const otherActiveSubscription = await findOtherActiveSubscription(
+            contact.telegramId,
+            subscriptionId
+          );
+          const now = Math.floor(Date.now() / 1000);
+          let accessUntil = invoicePaidPeriodEnd(invoice, subscription);
+          if (otherActiveSubscription?.current_period_end) {
+            accessUntil = Math.max(accessUntil, otherActiveSubscription.current_period_end);
+          }
+
+          let deliveryStatus = "non_inviato";
+          let deliveryNote = "⚠️ Nuovo link non inviato: manca l’ID Telegram.";
+
+          if (contact.telegramId && (otherActiveSubscription || accessUntil > now)) {
+            const invite = await bot.createChatInviteLink(CHANNEL_ID, {
+              expire_date: now + 180,
+              member_limit: 1,
+              creates_join_request: false,
+              name: contact.username
+                ? `late_${contact.username}`
+                : `late_${contact.telegramId}`,
+            });
+
+            const customerMessage = otherActiveSubscription
+              ? "💶 Pagamento ricevuto. Il tuo accesso a Myriamchannel è attivo. Ecco un nuovo link personale per entrare; è valido per 3 minuti."
+              : `💶 Pagamento tardivo ricevuto. Puoi rientrare in Myriamchannel usando questo link personale, valido per 3 minuti.\n\n` +
+                `Il pagamento copre il periodo fino al ${formatStripeDate(accessUntil)}. Il vecchio abbonamento resta annullato: per continuare dopo questa data dovrai effettuare una nuova iscrizione dal bot.`;
+
+            await bot.sendMessage(contact.telegramId, customerMessage, {
+              reply_markup: {
+                inline_keyboard: [[{ text: "🔗 Entra nel canale", url: invite.invite_link }]],
+              },
+            });
+
+            deliveryStatus = "link_inviato";
+            deliveryNote = otherActiveSubscription
+              ? "✅ Nuovo link inviato: risulta anche un altro abbonamento attivo."
+              : `✅ Nuovo link inviato fino al ${formatStripeDate(accessUntil)}; il vecchio abbonamento resta annullato.`;
+
+            await stripe.invoices.update(invoice.id, {
+              metadata: {
+                myriambot_late_payment_link_sent_at: String(now),
+                myriambot_late_access_until: String(accessUntil),
+                myriambot_late_access_telegram_id: String(contact.telegramId),
+                myriambot_late_access_subscription_id: subscriptionId || "",
+              },
+            });
+          } else if (!contact.telegramId) {
+            deliveryNote = "⚠️ Nuovo link non inviato: ID Telegram non disponibile nei dati Stripe.";
+          } else {
+            deliveryNote = "⚠️ Nuovo link non inviato: il periodo coperto dalla fattura risulta già terminato. Per riottenere l’accesso serve una nuova iscrizione.";
+          }
+
+          await bot.sendMessage(
+            ADMIN_ID,
+            `💶 Pagamento tardivo ricevuto\n` +
+            `Utente: ${displayName}\n` +
+            `Importo: ${amount} €\n` +
+            deliveryNote
+          );
+          console.log(
+            `Pagamento tardivo gestito: invoice=${invoice.id}; subscription=${subscriptionId || "n/d"}; telegram=${contact.telegramId || "n/d"}; esito=${deliveryStatus}`
+          );
+        } else if (invoice.status === "paid" && subscription?.status === "canceled") {
+          console.log(`Link pagamento tardivo già inviato per fattura ${invoice.id}; nessun reinvio`);
+        } else if (invoice.status === "paid") {
+          await bot.sendMessage(
+            ADMIN_ID,
+            `💶 Pagamento ricevuto per una fattura di abbonamento\n` +
+            `Utente: ${displayName}\n` +
+            `Importo: ${amount} €\n` +
+            `⚠️ Stato abbonamento: ${subscription?.status || "non verificabile"}. Nessun rinnovo o nuovo accesso è stato confermato automaticamente.`
+          );
+        }
       }
     }
 
@@ -953,6 +1176,21 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         cancellationReason !== "payment_failed" &&
         (scheduledEnd || endedAfterBillingPeriod);
 
+      let otherActiveSubscription = null;
+      let activeSubscriptionCheckError = null;
+      try {
+        otherActiveSubscription = await findOtherActiveSubscription(
+          telegramId,
+          subscription.id
+        );
+      } catch (error) {
+        activeSubscriptionCheckError = error;
+        console.error(
+          `Impossibile verificare altri abbonamenti attivi per Telegram ${telegramId || "n/d"}:`,
+          error.message
+        );
+      }
+
       // L'avviso di scadenza viene inviato solo alla fine del periodo pagato;
       // cancellazioni immediate e chiusure per mancato pagamento restano terminate.
       const endTitle = isExpired ? "⏰ Abbonamento scaduto!" : "❌ Abbonamento terminato!";
@@ -963,15 +1201,28 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       if (cancellationReason !== "payment_failed") {
         await bot.sendMessage(
           ADMIN_ID,
-          `${endTitle}\nUtente: ${displayName}`
+          `${endTitle}\nUtente: ${displayName}` +
+          (otherActiveSubscription
+            ? "\nℹ️ Accesso mantenuto: risulta un altro abbonamento attivo."
+            : activeSubscriptionCheckError
+            ? "\n⚠️ Rimozione sospesa: non è stato possibile verificare altri abbonamenti attivi."
+            : "")
         );
       }
 
       let channelRemovalSucceeded = false;
       let channelRemovalError = null;
 
-      //RIMOZIONE DAL CANALE
-      if (telegramId) {
+      // Rimuove l'utente solo se non risulta un altro abbonamento attivo.
+      // In caso di errore di verifica, sospende la rimozione per evitare di
+      // espellere un cliente che potrebbe avere un abbonamento valido.
+      if (otherActiveSubscription) {
+        console.log(
+          `Utente ${telegramId} mantenuto nel canale: abbonamento attivo ${otherActiveSubscription.id}`
+        );
+      } else if (activeSubscriptionCheckError) {
+        channelRemovalError = activeSubscriptionCheckError;
+      } else if (telegramId) {
         try {
           await bot.banChatMember(CHANNEL_ID, telegramId);
           await bot.unbanChatMember(CHANNEL_ID, telegramId);
@@ -1024,6 +1275,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           ADMIN_ID,
           channelRemovalSucceeded
             ? `⚠️ ${failureAdminTitle}\nUtente: ${displayName}\nOperazione: ${failureOperation}\nTentativo: ${attemptNumber}\nCausa: ${failureCause}${failureCodeLine}\n✅ Utente rimosso dal canale Telegram.`
+            : otherActiveSubscription
+            ? `⚠️ ${failureAdminTitle}\nUtente: ${displayName}\nOperazione: ${failureOperation}\nTentativo: ${attemptNumber}\nCausa: ${failureCause}${failureCodeLine}\nℹ️ Utente mantenuto nel canale: risulta un altro abbonamento attivo.`
             : `⚠️ ${failureAdminTitle}\nUtente: ${displayName}\nOperazione: ${failureOperation}\nTentativo: ${attemptNumber}\nCausa: ${failureCause}${failureCodeLine}\n⚠️ Rimozione dal canale Telegram non riuscita: ${channelRemovalError?.message || "errore non specificato"}.`
         );
       }
@@ -1060,5 +1313,11 @@ app.listen(PORT, () => console.log("Webhook attivo"));
 
 // Il promemoria viene ricostruito dalle fatture Stripe aperte e dai metadata:
 // resta programmato anche se il servizio viene riavviato prima della scadenza.
-setTimeout(() => { void scanForDuePreRetryReminders(); }, 10 * 1000);
-setInterval(() => { void scanForDuePreRetryReminders(); }, PRE_RETRY_REMINDER_SCAN_INTERVAL_MS);
+setTimeout(() => {
+  void scanForDuePreRetryReminders();
+  void scanForDueLatePaymentAccessExpirations();
+}, 10 * 1000);
+setInterval(() => {
+  void scanForDuePreRetryReminders();
+  void scanForDueLatePaymentAccessExpirations();
+}, PRE_RETRY_REMINDER_SCAN_INTERVAL_MS);
